@@ -1,0 +1,9 @@
+# Rust
+target/
+
+# IDE
+.idea/
+.vscode/
+
+# Program specific
+test/

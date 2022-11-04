@@ -1,0 +1,11 @@
+[package]
+name = "snap_rs"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+log = "0.4"
+fern = {version = "0.6", features = ["colored"]}
+chrono = "0.4"
