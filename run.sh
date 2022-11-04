@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Exit on error
+set -e
+
 # This script is used to build and run the project in a 'test' folder, so that
 # the project can be tested without cluttering the main folder.
 

@@ -1,0 +1,4 @@
+# The default config. All options in here are automatically appended to the main config if missing.
+
+[general]
+log_level = "info"
