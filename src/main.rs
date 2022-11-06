@@ -1,8 +1,11 @@
 mod config;
+mod network;
+mod packets;
+mod server;
 
-use std::io::Write;
+use config::CONFIG;
 
-use log::{debug, error, info, trace, warn};
+use log::info;
 
 fn setup_logger(log_level: log::LevelFilter) -> Result<(), fern::InitError> {
     if log_level == log::LevelFilter::Error || log_level == log::LevelFilter::Off {
@@ -70,21 +73,12 @@ fn main() {
     // Create 'logs' directory if it doesn't exist
     std::fs::create_dir_all("logs").unwrap();
 
-    // Load config from file and merge with default config
-    let config = config::Config::load("config.toml"); // merge done inside
-
-    setup_logger(config.general.log_level.into()).unwrap(); // Really hate how I have to use .into()
+    setup_logger(CONFIG.general.log_level.into()).unwrap(); // Really hate how I have to use .into()
 
     info!("Hello, world!");
-    debug!("This should not be printed");
-    warn!("This is a warning");
-    error!("This is an error");
-    trace!("This should not be printed");
+
+    let mut server = server::Server::new();
+    server.start();
 
     // Cleanup
-
-    // Save config to file
-    let mut file = std::fs::File::create("config.toml").unwrap();
-    file.write_all(toml::to_string(&config).unwrap().as_bytes())
-        .unwrap();
 }

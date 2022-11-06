@@ -2,3 +2,7 @@
 
 [general]
 log_level = "info"
+max_players = 20
+
+[network]
+port = 25565

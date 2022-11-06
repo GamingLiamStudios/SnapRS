@@ -1,7 +1,12 @@
+use std::io::Write;
+
+use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 
+use bincode::config::{BigEndian, Configuration, Fixint, SkipFixedArrayLength};
+
 #[derive(Clone, Copy)]
-pub(crate) struct LogLevel {
+pub struct LogLevel {
     level: log::LevelFilter,
 }
 
@@ -44,18 +49,40 @@ impl<'de> Deserialize<'de> for LogLevel {
     }
 }
 
+// Load config from file and merge with default config
+lazy_static! {
+    pub static ref CONFIG: Config = Config::load("config.toml");
+}
+
+pub static BC_CONFIG: Configuration<BigEndian, Fixint, SkipFixedArrayLength> =
+    bincode::config::standard()
+        .with_big_endian()
+        .with_fixed_int_encoding()
+        .skip_fixed_array_length();
+
 #[derive(Serialize, Deserialize)]
-pub(crate) struct Config {
-    pub(crate) general: GeneralConfig,
+pub struct Config {
+    pub general: GeneralConfig,
+    pub network: NetworkConfig,
+
+    // Don't serialize
+    #[serde(skip)]
+    path: String,
 }
 
 #[derive(Serialize, Deserialize)]
-pub(crate) struct GeneralConfig {
-    pub(crate) log_level: LogLevel,
+pub struct GeneralConfig {
+    pub log_level: LogLevel,
+    pub max_players: usize,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct NetworkConfig {
+    pub port: u16,
 }
 
 impl Config {
-    pub(crate) fn load(path: &str) -> Self {
+    pub fn load(path: &str) -> Self {
         let default: toml::Value =
             toml::from_str(std::include_str!("../config.default.toml")).unwrap();
 
@@ -65,10 +92,25 @@ impl Config {
         std::io::Read::read_to_string(&mut file, &mut contents).unwrap();
 
         // Merge default config with config from file
-        let config: toml::Value = toml::from_str(&contents).unwrap();
-        serde_toml_merge::merge(default, config)
+        let cfg_file = toml::from_str(&contents).unwrap();
+        let mut cfg = serde_toml_merge::merge(default, cfg_file)
             .unwrap()
             .try_into::<Config>()
-            .unwrap()
+            .unwrap();
+        cfg.path = path.to_string();
+        cfg
+    }
+
+    pub fn destroy(&self) {
+        // Save config to file
+        let mut file = std::fs::File::create(self.path.as_str()).unwrap();
+        file.write_all(toml::to_string(&self).unwrap().as_bytes())
+            .unwrap();
+    }
+}
+
+impl Drop for Config {
+    fn drop(&mut self) {
+        self.destroy();
     }
 }
