@@ -48,9 +48,7 @@ impl NetworkManager {
         let sever_connections = self.connections.clone();
 
         self.listener_thread = Some(thread::spawn(move || {
-            let listener =
-                TcpListener::bind(format!("127.0.0.1:{}", CONFIG.network.port.to_string()))
-                    .unwrap();
+            let listener = TcpListener::bind(format!("127.0.0.1:{}", CONFIG.network.port)).unwrap();
             listener.set_nonblocking(true).unwrap();
 
             let mut connections = DenseSlotMap::with_capacity(CONFIG.general.max_players);
@@ -65,18 +63,18 @@ impl NetworkManager {
                             stream.set_nodelay(true).unwrap();
 
                             // Add connection to list
-                            let (netInbound, conInbound) = mpsc::channel();
-                            let (conOutbound, netOutbound) = mpsc::channel();
+                            let (net_inbound, con_inbound) = mpsc::channel();
+                            let (con_outbound, net_outbound) = mpsc::channel();
 
                             {
                                 let mut conn = sever_connections.lock().unwrap();
-                                (*conn).insert(ServerConnection::new(conInbound, conOutbound));
+                                (*conn).insert(ServerConnection::new(con_inbound, con_outbound));
                             }
 
                             connections.insert(NetworkConnection::new(
                                 stream,
-                                netInbound,
-                                netOutbound,
+                                net_inbound,
+                                net_outbound,
                             ));
                         }
                         Err(e) => {

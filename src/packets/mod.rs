@@ -16,8 +16,7 @@ macro_rules! packets {
             $(pub mod $dir {
                 $(
                     pub use [<$state _packets>]::decode_packet as [<decode_ $state>];
-                    mod [<$state _packets>] {
-                        use bincode::{Decode, Encode};
+                    pub mod [<$state _packets>] {
                         use crate::config::BC_CONFIG;
                         use crate::packets::{Packet, PacketResult, types::*};
 
@@ -38,7 +37,7 @@ macro_rules! packets {
                             }
                         }
                         $(
-                            #[derive(Decode, Encode)]
+                            #[derive(bincode::Decode, bincode::Encode)]
                             pub struct $name {
                                 $($inner)*
                             }
@@ -64,16 +63,26 @@ packets! {
     serverbound => {
         handshaking => {
             0x00 => Handshake {
-                protocol_version: v32,
-                server_address: BoundedString<255>,
-                server_port: u16,
-                next_state: u8, // is technically a varint, but the valid range is within a u8
+                pub protocol_version: v32,
+                pub server_address: BoundedString<255>,
+                pub server_port: u16,
+                pub next_state: u8, // is technically a varint, but the valid range is within a u8
             }
         },
         status => {
             0x00 => Request {},
             0x01 => Ping {
-                payload: i64
+                pub payload: i64
+            }
+        }
+    },
+    clientbound => {
+        status => {
+            0x00 => Response {
+                pub json_response: BoundedString<32767>
+            },
+            0x01 => Ping {
+                pub payload: i64
             }
         }
     }

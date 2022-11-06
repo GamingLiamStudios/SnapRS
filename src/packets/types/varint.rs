@@ -1,14 +1,12 @@
 use bincode::{BorrowDecode, Decode, Encode};
 
-use crate::config::BC_CONFIG;
-
 #[allow(non_camel_case_types)]
 pub struct v32 {
     value: u32,
 }
 
 impl v32 {
-    pub fn read_from_vec(vec: &Vec<u8>) -> Self {
+    pub fn read_from_vec(vec: &[u8]) -> Self {
         let mut value = 0;
 
         for i in (0..32).step_by(7) {
