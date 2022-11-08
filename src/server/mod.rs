@@ -1,6 +1,9 @@
 use log::debug;
 
-use crate::{network::NetworkManager, packets::Packets};
+use crate::{
+    network::NetworkManager,
+    packets::{internal, Packets},
+};
 
 pub struct Server {
     network_manager: NetworkManager,
@@ -30,6 +33,23 @@ impl Server {
                     Packets::InternalClientSwitchState(packet) => {
                         connection.state = packet.state;
                         debug!("Client switched state to {}", u8::from(packet.state));
+                    }
+                    Packets::InternalClientBounce(packet) => {
+                        debug!("Client bounced");
+                        connection
+                            .outbound
+                            .send(Packets::from(internal::network_packets::Bounce {
+                                data: packet.data,
+                            }))
+                            .unwrap();
+                    }
+                    Packets::InternalClientDisconnect(packet) => {
+                        connection
+                            .outbound
+                            .send(Packets::from(internal::network_packets::Disconnect {
+                                reason: packet.reason,
+                            }))
+                            .unwrap();
                     }
                     _ => {}
                 }

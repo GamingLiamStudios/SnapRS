@@ -1,6 +1,6 @@
 use bincode::{Decode, Encode};
 
-use crate::packets::{types::v32, Packet};
+use crate::packets::{types::v32, Packets};
 
 pub struct RawPacket {
     pub id: u8, // Packet ID won't be beyond bounds of u8
@@ -11,7 +11,7 @@ pub struct RawPacket {
 trait Compressed {}
 
 /// Serialization
-impl bincode::Encode for Box<dyn Packet> {
+impl bincode::Encode for Packets {
     fn encode<E: bincode::enc::Encoder>(
         &self,
         encoder: &mut E,
@@ -21,7 +21,30 @@ impl bincode::Encode for Box<dyn Packet> {
 
         <v32 as Encode>::encode(&v32::from(len + 1), encoder)?;
         Encode::encode(&self.get_id(), encoder)?;
-        Encode::encode(&bytes.as_slice(), encoder)?;
+
+        // hate this
+        for byte in bytes {
+            Encode::encode(&byte, encoder)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl Encode for RawPacket {
+    fn encode<E: bincode::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> core::result::Result<(), bincode::error::EncodeError> {
+        let len = self.data.len() as u32;
+
+        <v32 as Encode>::encode(&v32::from(len + 1), encoder)?;
+        Encode::encode(&self.id, encoder)?;
+
+        // hate this
+        for byte in &self.data {
+            Encode::encode(&byte, encoder)?;
+        }
 
         Ok(())
     }

@@ -1,4 +1,5 @@
 use bincode::{BorrowDecode, Decode, Encode};
+use log::debug;
 
 use super::v32;
 
@@ -12,6 +13,7 @@ impl<const L: usize> bincode::Encode for BoundedString<L> {
         &self,
         encoder: &mut E,
     ) -> core::result::Result<(), bincode::error::EncodeError> {
+        debug!("Encoding BoundedString with length {}", self.value.len());
         Encode::encode(&v32::from(self.value.len() as u32), encoder)?;
 
         for byte in self.value.as_bytes() {
@@ -69,5 +71,11 @@ impl<const L: usize> From<String> for BoundedString<{ L }> {
             "String outside specified bounds"
         );
         Self { value }
+    }
+}
+
+impl<const L: usize> From<BoundedString<L>> for String {
+    fn from(value: BoundedString<L>) -> Self {
+        value.value
     }
 }

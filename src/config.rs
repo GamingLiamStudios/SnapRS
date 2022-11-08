@@ -64,6 +64,7 @@ pub static BC_CONFIG: Configuration<BigEndian, Fixint, SkipFixedArrayLength> =
 pub struct Config {
     pub general: GeneralConfig,
     pub network: NetworkConfig,
+    pub server: ServerConfig,
 
     // Don't serialize
     #[serde(skip)]
@@ -73,12 +74,17 @@ pub struct Config {
 #[derive(Serialize, Deserialize)]
 pub struct GeneralConfig {
     pub log_level: LogLevel,
-    pub max_players: usize,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct NetworkConfig {
     pub port: u16,
+    pub max_players: usize,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ServerConfig {
+    pub motd: String,
 }
 
 impl Config {

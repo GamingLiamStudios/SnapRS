@@ -3,11 +3,12 @@ use slotmap::{DefaultKey, DenseSlotMap};
 
 use crate::config::{BC_CONFIG, CONFIG};
 
-use crate::packets::*;
+use crate::packets::{clientbound, internal, serverbound, Packets};
 
-use crate::packets::types::{v32, ConnectionState};
+use crate::packets::types::{v32, BoundedString, ConnectionState};
 
 use super::{connection::*, raw_packet::RawPacket};
+use std::io::Write;
 use std::{
     io::Read,
     net::TcpListener,
@@ -51,9 +52,9 @@ impl NetworkManager {
 
         self.listener_thread = Some(thread::spawn(move || {
             let listener = TcpListener::bind(format!("127.0.0.1:{}", CONFIG.network.port)).unwrap();
-            listener.set_nonblocking(true).unwrap();
+            listener.set_nonblocking(true).unwrap(); // rip cpu
 
-            let mut connections = DenseSlotMap::with_capacity(CONFIG.general.max_players);
+            let mut connections = DenseSlotMap::with_capacity(CONFIG.network.max_players);
 
             while connected.load(std::sync::atomic::Ordering::Relaxed) {
                 // Handle all incoming connections(non-blocking)
@@ -94,6 +95,8 @@ impl NetworkManager {
                 // Handle incoming/outgoing data from all connections
                 let mut remove = Vec::new();
                 let mut bytes = [0; 4096];
+
+                let online = connections.len();
                 for (key, connection) in connections.iter_mut() {
                     //debug!("Handling connection");
 
@@ -186,14 +189,146 @@ impl NetworkManager {
 
                                 connection
                                     .inbound
-                                    .send(Packets::InternalClientSwitchState(Box::new(
-                                        internal::client_packets::SwitchState {
-                                            state: connection.state,
-                                        },
-                                    )))
+                                    .send(Packets::from(internal::client_packets::SwitchState {
+                                        state: connection.state,
+                                    }))
+                                    .unwrap();
+                            }
+                            Packets::ServerboundStatusRequest(_) => {
+                                #[derive(serde::Serialize)]
+                                struct StatusResponse {
+                                    version: Version,
+                                    players: Players,
+                                    description: Chat,
+
+                                    #[serde(skip_serializing_if = "Option::is_none")]
+                                    favicon: Option<String>,
+                                }
+
+                                #[derive(serde::Serialize)]
+                                struct Version {
+                                    name: String,
+                                    protocol: i32,
+                                }
+
+                                #[derive(serde::Serialize)]
+                                struct Players {
+                                    max: usize,
+                                    online: usize,
+                                    sample: Vec<Player>,
+                                }
+
+                                #[derive(serde::Serialize)]
+                                struct Player {
+                                    name: String,
+                                    id: String,
+                                }
+
+                                #[derive(serde::Serialize)]
+                                struct Chat {
+                                    text: String,
+                                }
+
+                                let response = StatusResponse {
+                                    version: Version {
+                                        name: "1.16.5".to_string(),
+                                        protocol: 754,
+                                    },
+                                    players: Players {
+                                        max: CONFIG.network.max_players,
+                                        online,
+                                        sample: Vec::new(), // TODO
+                                    },
+                                    description: Chat {
+                                        text: CONFIG.server.motd.clone(),
+                                    },
+                                    favicon: None,
+                                };
+
+                                let response = serde_json::to_string(&response).unwrap();
+                                debug!("Sending status response: {}", response);
+
+                                connection
+                                    .inbound
+                                    .send(Packets::from(internal::client_packets::Bounce {
+                                        data: Packets::from(
+                                            clientbound::status_packets::Response {
+                                                json_response: BoundedString::<32767>::from(
+                                                    response,
+                                                ),
+                                            },
+                                        ),
+                                    }))
+                                    .unwrap();
+                            }
+                            Packets::ServerboundStatusPing(packet) => {
+                                connection
+                                    .inbound
+                                    .send(Packets::from(internal::client_packets::Bounce {
+                                        data: Packets::from(clientbound::status_packets::Pong {
+                                            payload: packet.payload,
+                                        }),
+                                    }))
+                                    .unwrap();
+                                connection
+                                    .inbound
+                                    .send(Packets::from(internal::client_packets::Disconnect {
+                                        reason: BoundedString::<32767>::from("".to_string()),
+                                    }))
                                     .unwrap();
                             }
                             _ => {}
+                        }
+                    }
+                }
+
+                // Send packets to client
+                for (key, connection) in connections.iter_mut() {
+                    let mut packets: Vec<u8> = Vec::new();
+
+                    while let Ok(packet) = connection.outbound.try_recv() {
+                        debug!("Sending packet: {}", packet.get_id());
+                        let mut bytes = Vec::new();
+
+                        let id = packet.get_id();
+
+                        match packet {
+                            Packets::InternalNetworkDisconnect(packet) => {
+                                debug!("Disconnecting client: {}", String::from(packet.reason));
+                                remove.push(key);
+                            }
+                            Packets::InternalNetworkBounce(packet) => {
+                                debug!("Bouncing packet to client");
+                                bytes.extend(packet.data.get_data());
+                            }
+                            _ => {
+                                bytes.extend(packet.get_data());
+                            }
+                        }
+
+                        packets.extend(
+                            bincode::encode_to_vec(RawPacket { id, data: bytes }, BC_CONFIG)
+                                .unwrap(),
+                        );
+                    }
+
+                    if !packets.is_empty() {
+                        debug!("Sending {} bytes to client", packets.len());
+
+                        let mut written = 0;
+                        while written < packets.len() {
+                            match connection.socket.write(&packets[written..]) {
+                                Ok(n) => {
+                                    debug!("Wrote {} bytes", n);
+                                    written += n;
+                                }
+                                Err(e) => {
+                                    if e.kind() != std::io::ErrorKind::WouldBlock {
+                                        error!("Error writing to connection: {}", e);
+                                    }
+                                    break;
+                                }
+                            }
                         }
                     }
                 }

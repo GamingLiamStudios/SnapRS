@@ -1,5 +1,7 @@
 pub(crate) mod types;
 
+use crate::config::BC_CONFIG;
+
 pub trait Packet {
     fn get_id(&self) -> u8;
     fn get_data(&self) -> Vec<u8>;
@@ -11,6 +13,44 @@ macro_rules! packets {
             #[allow(dead_code)]
             pub enum Packets {
                 $($($([<$dir:camel $state:camel $name:camel>](Box<[<$dir:lower>]::[<$state:lower _packets>]::$name>),)*)*)*
+            }
+
+            $($($(
+                impl From<[<$dir:lower>]::[<$state:lower _packets>]::$name> for Packets {
+                    fn from(packet: [<$dir:lower>]::[<$state:lower _packets>]::$name) -> Self {
+                        Self::[<$dir:camel $state:camel $name:camel>](Box::new(packet))
+                    }
+                }
+            )*)*)*
+
+            impl Packets {
+                pub fn get_id(&self) -> u8 {
+                    match self {
+                        $($($(Self::[<$dir:camel $state:camel $name:camel>](..) => $id,)*)*)*
+                    }
+                }
+
+                pub fn get_data(&self) -> Vec<u8> {
+                    match self {
+                        $($($(Self::[<$dir:camel $state:camel $name:camel>](packet) => bincode::encode_to_vec(&packet, BC_CONFIG).unwrap(),)*)*)*
+                    }
+                }
+            }
+
+            impl bincode::Decode for Packets {
+                fn decode<D: bincode::de::Decoder>(
+                    decoder: &mut D,
+                ) -> core::result::Result<Self, bincode::error::DecodeError> {
+                    panic!("Decode is not implemented for Packets");
+                }
+            }
+
+            impl<'de> bincode::BorrowDecode<'de> for Packets {
+                fn borrow_decode<D: bincode::de::BorrowDecoder<'de>>(
+                    decoder: &mut D,
+                ) -> core::result::Result<Self, bincode::error::DecodeError> {
+                    panic!("BorrowDecode is not implemented for Packets");
+                }
             }
 
             $(pub mod [<$dir:lower>] {
@@ -123,7 +163,7 @@ packets! {
             0x00 => Response {
                 pub json_response: BoundedString<32767>
             },
-            0x01 => Ping {
+            0x01 => Pong {
                 pub payload: i64
             }
         }
@@ -135,14 +175,17 @@ packets! {
             },
             0x01 => SwitchState {
                 pub state: crate::packets::PacketState
+            },
+            0x02 => Bounce {
+                pub data: super::super::Packets
             }
         },
         Network => {
-            0x00 => Disconnect {
+            0x00 => Disconnect { // Bounce-back disconnect
                 pub reason: BoundedString<32767>
             },
-            0x01 => SwitchState {
-                pub state: crate::packets::PacketState
+            0x01 => Bounce {
+                pub data: super::super::Packets
             }
         }
     }
