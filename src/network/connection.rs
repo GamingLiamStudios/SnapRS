@@ -1,14 +1,15 @@
 use std::net::TcpStream;
-use std::sync::mpsc;
 
 use crate::packets::Packets;
 
 use crate::packets::types::ConnectionState;
 
+use crossbeam_channel::{Receiver, Sender};
+
 // Just a public interface for the connection
 pub struct ServerConnection {
-    pub inbound: mpsc::Receiver<Packets>, // Data from NetworkManager
-    pub outbound: mpsc::Sender<Packets>,  // Data to NetworkManager
+    pub inbound: Receiver<Packets>, // Data from NetworkManager
+    pub outbound: Sender<Packets>,  // Data to NetworkManager
 
     pub state: ConnectionState,
 }
@@ -16,14 +17,14 @@ pub struct ServerConnection {
 pub(crate) struct NetworkConnection {
     pub(crate) socket: TcpStream,
 
-    pub(crate) inbound: mpsc::Sender<Packets>, // Data to Server
-    pub(crate) outbound: mpsc::Receiver<Packets>, // Data from Server
+    pub(crate) inbound: Sender<Packets>,    // Data to Server
+    pub(crate) outbound: Receiver<Packets>, // Data from Server
 
     pub(crate) state: ConnectionState,
 }
 
 impl ServerConnection {
-    pub fn new(inbound: mpsc::Receiver<Packets>, outbound: mpsc::Sender<Packets>) -> Self {
+    pub fn new(inbound: Receiver<Packets>, outbound: Sender<Packets>) -> Self {
         Self {
             inbound,
             outbound,
@@ -35,8 +36,8 @@ impl ServerConnection {
 impl NetworkConnection {
     pub(crate) fn new(
         socket: TcpStream,
-        inbound: mpsc::Sender<Packets>,
-        outbound: mpsc::Receiver<Packets>,
+        inbound: Sender<Packets>,
+        outbound: Receiver<Packets>,
     ) -> Self {
         Self {
             socket,

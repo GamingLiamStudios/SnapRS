@@ -1,4 +1,3 @@
-use bincode::Decode;
 use log::{debug, error};
 use slotmap::{DefaultKey, DenseSlotMap};
 
@@ -12,7 +11,7 @@ use super::{connection::*, raw_packet::RawPacket};
 use std::{
     io::Read,
     net::TcpListener,
-    sync::{atomic::AtomicBool, mpsc, Arc, Mutex},
+    sync::{atomic::AtomicBool, Arc, Mutex},
     thread::{self, JoinHandle},
 };
 
@@ -68,8 +67,8 @@ impl NetworkManager {
                             //stream.set_nodelay(true).unwrap();
 
                             // Add connection to list
-                            let (net_inbound, con_inbound) = mpsc::channel();
-                            let (con_outbound, net_outbound) = mpsc::channel();
+                            let (net_inbound, con_inbound) = crossbeam_channel::unbounded();
+                            let (con_outbound, net_outbound) = crossbeam_channel::unbounded();
 
                             {
                                 let mut conn = server_connections.lock().unwrap();
@@ -185,12 +184,13 @@ impl NetworkManager {
                                 );
                                 connection.state = packet.next_state.into();
 
-                                let p = internal::client_packets::SwitchState {
-                                    state: connection.state,
-                                };
                                 connection
                                     .inbound
-                                    .send(Packets::InternalClientSwitchState(p))
+                                    .send(Packets::InternalClientSwitchState(Box::new(
+                                        internal::client_packets::SwitchState {
+                                            state: connection.state,
+                                        },
+                                    )))
                                     .unwrap();
                             }
                             _ => {}

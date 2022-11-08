@@ -1,4 +1,6 @@
-use crate::network::NetworkManager;
+use log::debug;
+
+use crate::{network::NetworkManager, packets::Packets};
 
 pub struct Server {
     network_manager: NetworkManager,
@@ -20,7 +22,18 @@ impl Server {
     }
 
     fn process_connections(&self) {
-        let connections = self.network_manager.connections.lock().unwrap();
-        for (id, connection) in &*connections {}
+        let mut connections = self.network_manager.connections.lock().unwrap();
+        for (_, connection) in &mut *connections {
+            // Read all incoming packets
+            while let Ok(packet) = connection.inbound.try_recv() {
+                match packet {
+                    Packets::InternalClientSwitchState(packet) => {
+                        connection.state = packet.state;
+                        debug!("Client switched state to {}", u8::from(packet.state));
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 }

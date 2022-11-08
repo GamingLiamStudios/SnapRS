@@ -1,6 +1,6 @@
 pub(crate) mod types;
 
-pub trait Packet: Send {
+pub trait Packet {
     fn get_id(&self) -> u8;
     fn get_data(&self) -> Vec<u8>;
 }
@@ -10,7 +10,7 @@ macro_rules! packets {
         paste::paste! {
             #[allow(dead_code)]
             pub enum Packets {
-                $($($([<$dir:camel $state:camel $name:camel>]([<$dir:lower>]::[<$state:lower _packets>]::$name),)*)*)*
+                $($($([<$dir:camel $state:camel $name:camel>](Box<[<$dir:lower>]::[<$state:lower _packets>]::$name>),)*)*)*
             }
 
             $(pub mod [<$dir:lower>] {
@@ -31,7 +31,7 @@ macro_rules! packets {
                                 $(
                                     $id => {
                                         let (packet, _) = bincode::decode_from_slice::<$name, _>(data.as_slice(), BC_CONFIG).unwrap();
-                                        Some(Packets::[<$dir:camel $state:camel $name:camel>](packet))
+                                        Some(Packets::[<$dir:camel $state:camel $name:camel>](Box::new(packet)))
                                     },
                                 )*
                                 _ => {
@@ -86,6 +86,17 @@ impl From<u8> for PacketState {
             2 => Self::Login,
             3 => Self::Play,
             _ => panic!("Unknown packet state id: {}", id),
+        }
+    }
+}
+
+impl From<PacketState> for u8 {
+    fn from(state: PacketState) -> Self {
+        match state {
+            PacketState::Handshake => 0,
+            PacketState::Status => 1,
+            PacketState::Login => 2,
+            PacketState::Play => 3,
         }
     }
 }
