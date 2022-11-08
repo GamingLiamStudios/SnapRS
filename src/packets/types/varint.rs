@@ -1,6 +1,7 @@
 use bincode::{BorrowDecode, Decode, Encode};
 
 #[allow(non_camel_case_types)]
+#[derive(Clone, Copy)]
 pub struct v32 {
     value: u32,
 }
