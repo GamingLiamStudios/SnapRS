@@ -1,4 +1,4 @@
-use log::{debug, error};
+use log::{debug, error, trace};
 use slotmap::{DefaultKey, DenseSlotMap};
 
 use crate::config::{BC_CONFIG, CONFIG};
@@ -61,7 +61,7 @@ impl NetworkManager {
                 for stream in listener.incoming() {
                     match stream {
                         Ok(stream) => {
-                            debug!("New connection from {}", stream.peer_addr().unwrap());
+                            trace!("New connection from {}", stream.peer_addr().unwrap());
 
                             // Configure TCP Stream
                             stream.set_nonblocking(true).unwrap();
@@ -81,7 +81,7 @@ impl NetworkManager {
                                 net_inbound,
                                 net_outbound,
                             ));
-                            debug!("Connection Accepted. Total: {}", connections.len());
+                            trace!("Connection Accepted. Total: {}", connections.len());
                         }
                         Err(e) => {
                             if e.kind() != std::io::ErrorKind::WouldBlock {
@@ -107,7 +107,7 @@ impl NetworkManager {
                             0
                         }
                         Ok(n) => {
-                            debug!("Read {} bytes", n);
+                            trace!("Read {} bytes", n);
                             n
                         }
                         Err(e) => {
@@ -132,14 +132,14 @@ impl NetworkManager {
                         // TODO: Check if we can use packet_bytes.capacity() instead
                         while packet_bytes.len() < length {
                             let mut remain = length - packet_bytes.len();
-                            debug!("Packet incomplete. {} bytes remaining", remain);
+                            trace!("Packet incomplete. {} bytes remaining", remain);
 
                             // SAFETY: length <= packet_bytes.capacity()
                             unsafe { packet_bytes.set_len(length) };
 
                             match connection.socket.read(&mut bytes[read..]) {
                                 Ok(n) => {
-                                    debug!("Read {} bytes", n);
+                                    trace!("Read {} bytes", n);
                                     remain -= n;
                                     // read += n; // Should be fine without
 
@@ -246,7 +246,6 @@ impl NetworkManager {
                                 };
 
                                 let response = serde_json::to_string(&response).unwrap();
-                                debug!("Sending status response: {}", response);
 
                                 connection
                                     .inbound
@@ -287,10 +286,10 @@ impl NetworkManager {
                     let mut packets: Vec<u8> = Vec::new();
 
                     while let Ok(packet) = connection.outbound.try_recv() {
-                        debug!("Sending packet: {}", packet.get_id());
+                        trace!("Sending packet: {}", packet.get_id());
                         let mut bytes = Vec::new();
 
-                        let id = packet.get_id();
+                        let mut id = packet.get_id();
 
                         match packet {
                             Packets::InternalNetworkDisconnect(packet) => {
@@ -298,7 +297,7 @@ impl NetworkManager {
                                 remove.push(key);
                             }
                             Packets::InternalNetworkBounce(packet) => {
-                                debug!("Bouncing packet to client");
+                                id = packet.data.get_id();
                                 bytes.extend(packet.data.get_data());
                             }
                             _ => {
@@ -313,13 +312,13 @@ impl NetworkManager {
                     }
 
                     if !packets.is_empty() {
-                        debug!("Sending {} bytes to client", packets.len());
+                        trace!("Sending {} bytes to client", packets.len());
 
                         let mut written = 0;
                         while written < packets.len() {
                             match connection.socket.write(&packets[written..]) {
                                 Ok(n) => {
-                                    debug!("Wrote {} bytes", n);
+                                    trace!("Wrote {} bytes", n);
                                     written += n;
                                 }
                                 Err(e) => {

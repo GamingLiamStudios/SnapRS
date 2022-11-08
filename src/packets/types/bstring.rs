@@ -13,7 +13,6 @@ impl<const L: usize> bincode::Encode for BoundedString<L> {
         &self,
         encoder: &mut E,
     ) -> core::result::Result<(), bincode::error::EncodeError> {
-        debug!("Encoding BoundedString with length {}", self.value.len());
         Encode::encode(&v32::from(self.value.len() as u32), encoder)?;
 
         for byte in self.value.as_bytes() {

@@ -35,7 +35,6 @@ impl Server {
                         debug!("Client switched state to {}", u8::from(packet.state));
                     }
                     Packets::InternalClientBounce(packet) => {
-                        debug!("Client bounced");
                         connection
                             .outbound
                             .send(Packets::from(internal::network_packets::Bounce {
