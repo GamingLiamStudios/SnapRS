@@ -3,9 +3,11 @@ mod network;
 mod packets;
 mod server;
 
+use std::sync::{atomic::AtomicBool, Arc};
+
 use config::CONFIG;
 
-use log::info;
+use log::{error, info};
 
 fn setup_logger(log_level: log::LevelFilter) -> Result<(), fern::InitError> {
     if log_level == log::LevelFilter::Error || log_level == log::LevelFilter::Off {
@@ -46,7 +48,7 @@ fn setup_logger(log_level: log::LevelFilter) -> Result<(), fern::InitError> {
         })
         .chain(fern::log_file(format!(
             "logs/{}.log",
-            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+            chrono::Local::now().format("%Y-%m-%d %H_%M_%S")
         ))?);
 
     // Log to stdout (with colors)
@@ -69,16 +71,38 @@ fn setup_logger(log_level: log::LevelFilter) -> Result<(), fern::InitError> {
     Ok(())
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create 'logs' directory if it doesn't exist
     std::fs::create_dir_all("logs").unwrap();
 
     setup_logger(CONFIG.general.log_level.into()).unwrap(); // Really hate how I have to use .into()
 
     info!("Hello, world!");
-
     let mut server = server::Server::new();
+
+    let ss = server.running.clone();
+
+    // Setup Interrupt handler for cleaner shutdown
+    let hard_exit = Arc::<AtomicBool>::new(false.into());
+    ctrlc::set_handler(move || {
+        info!("Shutting down...");
+        if hard_exit.load(std::sync::atomic::Ordering::Relaxed) {
+            error!("Forced shutdown");
+            std::process::exit(0);
+        } else {
+            hard_exit.store(true, std::sync::atomic::Ordering::Relaxed);
+
+            // TODO: this properly
+            ss.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+    })
+    .unwrap();
+
+    // Start the server
     server.start();
 
     // Cleanup
+    CONFIG.destroy(); // Save config
+
+    Ok(())
 }

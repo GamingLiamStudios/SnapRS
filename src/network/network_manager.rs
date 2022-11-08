@@ -35,6 +35,11 @@ impl NetworkManager {
         }
     }
 
+    pub fn stop(&mut self) {
+        self.connected
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
     fn destroy(&mut self) {
         self.connected
             .store(false, std::sync::atomic::Ordering::Relaxed);

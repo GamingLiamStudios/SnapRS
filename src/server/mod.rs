@@ -1,3 +1,5 @@
+use std::sync::{atomic::AtomicBool, Arc};
+
 use log::debug;
 
 use crate::{
@@ -7,21 +9,28 @@ use crate::{
 
 pub struct Server {
     network_manager: NetworkManager,
+
+    pub running: Arc<AtomicBool>,
 }
 
 impl Server {
     pub fn new() -> Self {
         Self {
             network_manager: NetworkManager::new(),
+            running: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub fn start(&mut self) {
         self.network_manager.start();
 
-        loop {
+        self.running
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        while self.running.load(std::sync::atomic::Ordering::Relaxed) {
             self.process_connections();
         }
+
+        self.network_manager.stop();
     }
 
     fn process_connections(&self) {

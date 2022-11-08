@@ -39,7 +39,7 @@ macro_rules! packets {
 
             impl bincode::Decode for Packets {
                 fn decode<D: bincode::de::Decoder>(
-                    decoder: &mut D,
+                    _decoder: &mut D,
                 ) -> core::result::Result<Self, bincode::error::DecodeError> {
                     panic!("Decode is not implemented for Packets");
                 }
@@ -47,7 +47,7 @@ macro_rules! packets {
 
             impl<'de> bincode::BorrowDecode<'de> for Packets {
                 fn borrow_decode<D: bincode::de::BorrowDecoder<'de>>(
-                    decoder: &mut D,
+                    _decoder: &mut D,
                 ) -> core::result::Result<Self, bincode::error::DecodeError> {
                     panic!("BorrowDecode is not implemented for Packets");
                 }

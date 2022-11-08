@@ -92,6 +92,13 @@ impl Config {
         let default: toml::Value =
             toml::from_str(std::include_str!("../config.default.toml")).unwrap();
 
+        // Create config file if it doesn't exist
+        if !std::path::Path::new(path).exists() {
+            let mut file = std::fs::File::create(path).unwrap();
+            file.write_all(toml::to_string(&default).unwrap().as_bytes())
+                .unwrap();
+        }
+
         // Read config from file
         let mut file = std::fs::File::open(path).unwrap();
         let mut contents = String::new();

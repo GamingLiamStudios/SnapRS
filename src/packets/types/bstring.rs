@@ -1,5 +1,4 @@
 use bincode::{BorrowDecode, Decode, Encode};
-use log::debug;
 
 use super::v32;
 
