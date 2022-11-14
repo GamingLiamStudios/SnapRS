@@ -75,7 +75,10 @@ impl Connection {
                                         written += n;
                                     }
                                     Err(e) => {
-                                        error!("Error writing to connection: {}", e);
+                                        if e.kind() != std::io::ErrorKind::WouldBlock {
+                                            error!("Error reading from connection: {}", e);
+                                        }
+                                        break;
                                     }
                                 }
                             }
@@ -116,7 +119,9 @@ impl Connection {
                         n
                     }
                     Err(e) => {
-                        error!("Error reading from connection: {}", e);
+                        if e.kind() != std::io::ErrorKind::WouldBlock {
+                            error!("Error reading from connection: {}", e);
+                        }
                         0
                     }
                 };
@@ -153,7 +158,9 @@ impl Connection {
                                 remain -= n;
                             }
                             Err(e) => {
-                                error!("Error reading from connection: {}", e);
+                                if e.kind() != std::io::ErrorKind::WouldBlock {
+                                    error!("Error reading from connection: {}", e);
+                                }
                                 break;
                             }
                         }
@@ -215,6 +222,13 @@ impl Connection {
     }
 
     pub async fn destroy(self) {
+        if self.connected.receiver_count() == 0
+            || self.writer.is_finished()
+            || self.reader.is_finished()
+        {
+            return;
+        }
+
         self.connected.send(true).unwrap();
 
         self.writer.await.unwrap();

@@ -49,7 +49,7 @@ impl NetworkManager {
                 .await
                 .unwrap();
 
-            let mut connections = DenseSlotMap::with_capacity(CONFIG.network.max_players);
+            let mut connections = Vec::with_capacity(CONFIG.network.max_players);
 
             // Handle all incoming connections
             loop {
@@ -65,14 +65,9 @@ impl NetworkManager {
                                 // Configure TCP Stream
                                 socket.set_nodelay(true).unwrap();
 
-                                let (connection, srv_con) = Connection::new(socket).await;
+                                let (connection, _srv_con) = Connection::new(socket).await;
 
-                                {
-                                    let mut conn = server_connections.lock().unwrap();
-                                    (*conn).insert(srv_con);
-                                }
-
-                                connections.insert(connection);
+                                connections.push(connection);
 
                                 trace!("Connection Accepted. Total: {}", connections.len());
                             }
@@ -84,8 +79,11 @@ impl NetworkManager {
                 }
             }
 
+            // TODO: Listen for disconnects
+            // TODO: Push connection to server_connections once it is fully connected
+
             // Close all connections
-            while let Some((_, connection)) = connections.drain().next() {
+            while let Some(connection) = connections.pop() {
                 connection.destroy().await;
             }
         }));
