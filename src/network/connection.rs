@@ -213,6 +213,7 @@ impl Connection {
             }
         });
 
+        // TODO: Investigate possibility of race conditions
         let crx = ctx.subscribe();
 
         (
