@@ -1,5 +1,6 @@
+use futures::StreamExt;
 use log::{error, trace};
-use slotmap::{DefaultKey, DenseSlotMap};
+use slotmap::{DefaultKey, DenseSlotMap, SlotMap};
 use tokio::sync::mpsc::Sender;
 
 use crate::config::CONFIG;
@@ -50,7 +51,9 @@ impl NetworkManager {
                 .await
                 .unwrap();
 
-            let mut connections = Vec::with_capacity(CONFIG.network.max_players);
+            let mut connections = SlotMap::with_capacity(CONFIG.network.max_players);
+
+            let mut df = futures::stream::FuturesUnordered::new();
 
             // Handle all incoming connections
             loop {
@@ -66,9 +69,15 @@ impl NetworkManager {
                                 // Configure TCP Stream
                                 socket.set_nodelay(true).unwrap();
 
-                                let (connection, _srv_con) = Connection::new(socket).await;
+                                let (connection, _srv_con, mut disconnect_future) = Connection::new(socket).await;
 
-                                connections.push(connection);
+                                let key = connections.insert(connection);
+
+                                // Disconnect listening
+                                df.push(tokio::spawn(async move {
+                                    disconnect_future.recv().await.expect("Go yell at GLS or make a PR if you see this. Error: DF_LAG");
+                                    key
+                                }));
 
                                 trace!("Connection Accepted. Total: {}", connections.len());
                             }
@@ -77,14 +86,17 @@ impl NetworkManager {
                             }
                         }
                     }
+                    Some(Ok(key)) = df.next() => {
+                        connections.remove(key);
+                        trace!("Connection Closed. Total: {}", connections.len());
+                    }
                 }
             }
 
-            // TODO: Listen for disconnects
             // TODO: Push connection to server_connections once it is fully connected
 
             // Close all connections
-            while let Some(connection) = connections.pop() {
+            while let Some((_, connection)) = connections.drain().next() {
                 connection.destroy().await;
             }
         }));

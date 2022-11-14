@@ -27,11 +27,14 @@ pub(crate) struct Connection {
 }
 
 impl Connection {
-    pub(crate) async fn new(socket: TcpStream) -> (Self, ServerConnection) {
+    pub(crate) async fn new(
+        socket: TcpStream,
+    ) -> (Self, ServerConnection, broadcast::Receiver<bool>) {
         let (inbound, incoming) = tokio::sync::mpsc::channel(32);
         let (outgoing, mut outbound) = tokio::sync::mpsc::channel::<Packets>(32);
 
-        let (ctx, mut crx) = broadcast::channel(1);
+        // NOTE: capacity 3 because *hopefully* max number of disconnect senders at one time
+        let (ctx, mut crx) = broadcast::channel(3);
 
         let (reader, writer) = socket.into_split();
 
@@ -110,7 +113,7 @@ impl Connection {
 
                 let read = match reader.try_read(&mut buffer) {
                     Ok(0) => {
-                        debug!("Connection closed");
+                        //trace!("Connection closed");
                         ctxc.send(true).unwrap();
                         0
                     }
@@ -210,6 +213,8 @@ impl Connection {
             }
         });
 
+        let crx = ctx.subscribe();
+
         (
             Self {
                 //outgoing,
@@ -218,6 +223,7 @@ impl Connection {
                 reader,
             },
             ServerConnection { incoming, outgoing },
+            crx,
         )
     }
 
