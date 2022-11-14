@@ -32,7 +32,7 @@ impl Server {
     }
 
     async fn process_connections(&self) {
-        let mut connections = self.network_manager.connections.lock().unwrap();
+        let mut connections = self.network_manager.connections.lock().await;
         for (_, connection) in &mut *connections {
             // Read all incoming packets
             while let Ok(packet) = connection.incoming.try_recv() {

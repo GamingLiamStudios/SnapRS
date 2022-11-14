@@ -5,7 +5,8 @@ use tokio::sync::mpsc::Sender;
 use crate::config::CONFIG;
 
 use super::connection::*;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
@@ -42,7 +43,7 @@ impl NetworkManager {
         let (ctx, mut crx) = tokio::sync::mpsc::channel(1);
         self.connected = Some(ctx);
 
-        let server_connections = self.connections.clone();
+        let _server_connections = self.connections.clone();
 
         self.listener_thread = Some(tokio::task::spawn(async move {
             let listener = TcpListener::bind(format!("127.0.0.1:{}", CONFIG.network.port))
