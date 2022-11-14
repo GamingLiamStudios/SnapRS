@@ -7,7 +7,7 @@ use std::sync::{atomic::AtomicBool, Arc};
 
 use config::CONFIG;
 
-use log::{error, info};
+use log::{debug, info};
 
 fn setup_logger(log_level: log::LevelFilter) -> Result<(), fern::InitError> {
     if log_level == log::LevelFilter::Error || log_level == log::LevelFilter::Off {
@@ -31,7 +31,7 @@ fn setup_logger(log_level: log::LevelFilter) -> Result<(), fern::InitError> {
 
     // Shared logger configuration
     let fmt_str = |message: &std::fmt::Arguments, record: &log::Record| -> String {
-        // Lifetimes throw a fit if `format_args!`
+        // FIXME: Lifetimes throw a fit if `format_args!`
         format!(
             "[{}][{}] {}",
             chrono::Local::now().format("%Y-%m-%d %H:%M:%S"), //record.target(),
@@ -75,34 +75,57 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create 'logs' directory if it doesn't exist
     std::fs::create_dir_all("logs").unwrap();
 
+    // logging *should* be fine with async/threading stuff
     setup_logger(CONFIG.general.log_level.into()).unwrap(); // Really hate how I have to use .into()
 
-    info!("Hello, world!");
-    let mut server = server::Server::new();
+    let tr = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
 
-    let ss = server.running.clone();
+    tr.block_on(async {
+        let running = Arc::new(AtomicBool::new(true));
+        let running_clone = running.clone();
 
-    // Setup Interrupt handler for cleaner shutdown
-    let hard_exit = Arc::<AtomicBool>::new(false.into());
-    ctrlc::set_handler(move || {
-        info!("Shutting down...");
-        if hard_exit.load(std::sync::atomic::Ordering::Relaxed) {
-            error!("Forced shutdown");
-            std::process::exit(0);
-        } else {
-            hard_exit.store(true, std::sync::atomic::Ordering::Relaxed);
+        let (ctx, mut crx) = tokio::sync::mpsc::channel(1);
 
-            // TODO: this properly
-            ss.store(false, std::sync::atomic::Ordering::Relaxed);
-        }
-    })
-    .unwrap();
+        // Handle SIGINT
+        let sigint = tokio::spawn(async move {
+            let mut called = false;
 
-    // Start the server
-    server.start();
+            loop {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {
+                        if !called {
+                            debug!("SIGINT received");
+                            running_clone.store(false, std::sync::atomic::Ordering::Relaxed);
+                            called = true;
+                        }
+                        else {
+                            debug!("SIGINT received again, exiting");
+                            std::process::exit(0);
+                        }
+                    }
+                    _ = crx.recv() => {
+                        break;
+                    }
+                }
+            }
+        });
+
+        info!("Hello, world!");
+
+        // Start server
+        server::start(running).await;
+
+        ctx.send(true).await.unwrap();
+        sigint.await.unwrap();
+    });
 
     // Cleanup
     CONFIG.destroy(); // Save config
+
+    info!("Goodbye!");
 
     Ok(())
 }

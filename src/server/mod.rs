@@ -2,10 +2,7 @@ use std::sync::{atomic::AtomicBool, Arc};
 
 use log::debug;
 
-use crate::{
-    network::NetworkManager,
-    packets::{internal, Packets},
-};
+use crate::network::NetworkManager;
 
 pub struct Server {
     network_manager: NetworkManager,
@@ -14,54 +11,40 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new() -> Self {
+    pub fn new(running: Arc<AtomicBool>) -> Self {
         Self {
             network_manager: NetworkManager::new(),
-            running: Arc::new(AtomicBool::new(false)),
+            running,
         }
     }
 
-    pub fn start(&mut self) {
-        self.network_manager.start();
+    pub async fn start(&mut self) {
+        self.network_manager.start().await;
 
         self.running
             .store(true, std::sync::atomic::Ordering::Relaxed);
         while self.running.load(std::sync::atomic::Ordering::Relaxed) {
-            self.process_connections();
+            self.process_connections().await;
         }
+        debug!("Server stopped");
 
-        self.network_manager.stop();
+        self.network_manager.stop().await;
     }
 
-    fn process_connections(&self) {
-        let mut connections = self.network_manager.connections.lock().unwrap();
+    async fn process_connections(&self) {
+        let mut connections = self.network_manager.connections.lock().await;
         for (_, connection) in &mut *connections {
             // Read all incoming packets
-            while let Ok(packet) = connection.inbound.try_recv() {
+            while let Ok(packet) = connection.incoming.try_recv() {
                 match packet {
-                    Packets::InternalClientSwitchState(packet) => {
-                        connection.state = packet.state;
-                        debug!("Client switched state to {}", u8::from(packet.state));
-                    }
-                    Packets::InternalClientBounce(packet) => {
-                        connection
-                            .outbound
-                            .send(Packets::from(internal::network_packets::Bounce {
-                                data: packet.data,
-                            }))
-                            .unwrap();
-                    }
-                    Packets::InternalClientDisconnect(packet) => {
-                        connection
-                            .outbound
-                            .send(Packets::from(internal::network_packets::Disconnect {
-                                reason: packet.reason,
-                            }))
-                            .unwrap();
-                    }
                     _ => {}
                 }
             }
         }
     }
+}
+
+pub async fn start(running: Arc<AtomicBool>) {
+    let mut server = Server::new(running);
+    server.start().await;
 }

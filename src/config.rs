@@ -80,6 +80,14 @@ pub struct GeneralConfig {
 pub struct NetworkConfig {
     pub port: u16,
     pub max_players: usize,
+
+    pub advanced: AdvancedNetworkConfig,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct AdvancedNetworkConfig {
+    pub buffer_size: usize,
+    pub buffered_packets: usize,
 }
 
 #[derive(Serialize, Deserialize)]

@@ -37,19 +37,13 @@ macro_rules! packets {
                 }
             }
 
-            impl bincode::Decode for Packets {
-                fn decode<D: bincode::de::Decoder>(
-                    _decoder: &mut D,
-                ) -> core::result::Result<Self, bincode::error::DecodeError> {
-                    panic!("Decode is not implemented for Packets");
-                }
-            }
-
-            impl<'de> bincode::BorrowDecode<'de> for Packets {
-                fn borrow_decode<D: bincode::de::BorrowDecoder<'de>>(
-                    _decoder: &mut D,
-                ) -> core::result::Result<Self, bincode::error::DecodeError> {
-                    panic!("BorrowDecode is not implemented for Packets");
+            impl std::fmt::Debug for Packets {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    write!(f, "Packets::")?;
+                    match self {
+                        $($($(Self::[<$dir:camel $state:camel $name:camel>](..) => write!(f, "[<$dir:camel $state:camel $name:camel>]").unwrap(),)*)*)*
+                    };
+                    Ok(())
                 }
             }
 
@@ -104,12 +98,8 @@ macro_rules! packets {
 }
 
 // TODO: Get these in the macro somehow
-pub enum PacketDirection {
-    Clientbound,
-    Serverbound,
-}
 
-// Won't actually ever be serialized. Just used for the macro
+// Won't actually ever be serialized. Just used for the macro to be happy
 #[derive(bincode::Decode, bincode::Encode, Copy, Clone)]
 pub enum PacketState {
     Handshake,
@@ -170,23 +160,27 @@ packets! {
     },
     Internal => {
         Client => {
-            0x00 => Disconnect {
-                pub reason: BoundedString<32767>
-            },
-            0x01 => SwitchState {
-                pub state: crate::packets::PacketState
-            },
-            0x02 => Bounce {
-                pub data: super::super::Packets
-            }
         },
         Network => {
-            0x00 => Disconnect { // Bounce-back disconnect
+            0x00 => Disconnect {
                 pub reason: BoundedString<32767>
-            },
-            0x01 => Bounce {
-                pub data: super::super::Packets
             }
         }
+    }
+}
+
+impl bincode::Decode for Packets {
+    fn decode<D: bincode::de::Decoder>(
+        _decoder: &mut D,
+    ) -> core::result::Result<Self, bincode::error::DecodeError> {
+        panic!("Decode is not implemented for Packets");
+    }
+}
+
+impl<'de> bincode::BorrowDecode<'de> for Packets {
+    fn borrow_decode<D: bincode::de::BorrowDecoder<'de>>(
+        _decoder: &mut D,
+    ) -> core::result::Result<Self, bincode::error::DecodeError> {
+        panic!("BorrowDecode is not implemented for Packets");
     }
 }

@@ -55,10 +55,13 @@ impl Decode for RawPacket {
         decoder: &mut D,
     ) -> core::result::Result<Self, bincode::error::DecodeError> {
         let len: v32 = Decode::decode(decoder)?;
-        let id: u8 = Decode::decode(decoder)?;
+        let mut len = u32::from(len) as usize;
 
-        let mut data = Vec::with_capacity(u32::from(len) as usize);
-        for _ in 0..u32::from(len) as usize {
+        let id: u8 = Decode::decode(decoder)?;
+        len -= 1;
+
+        let mut data = Vec::with_capacity(len);
+        for _ in 0..len {
             data.push(Decode::decode(decoder)?);
         }
 
