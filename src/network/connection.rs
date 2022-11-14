@@ -8,9 +8,10 @@ use crate::{config::CONFIG, packets::Packets};
 
 use crate::packets::types::{v32, BoundedString, ConnectionState};
 
-use tokio::sync::mpsc::{Receiver, Sender};
-
-use std::sync::{atomic::AtomicBool, Arc};
+use tokio::sync::{
+    broadcast,
+    mpsc::{Receiver, Sender},
+};
 
 pub struct ServerConnection {
     pub incoming: Receiver<Packets>,
@@ -18,9 +19,11 @@ pub struct ServerConnection {
 }
 
 pub(crate) struct Connection {
-    pub(crate) outgoing: Sender<Packets>,
+    //pub(crate) outgoing: Sender<Packets>,
+    pub(crate) connected: broadcast::Sender<bool>,
 
-    pub(crate) connected: Arc<AtomicBool>,
+    writer: tokio::task::JoinHandle<()>,
+    reader: tokio::task::JoinHandle<()>,
 }
 
 impl Connection {
@@ -28,68 +31,84 @@ impl Connection {
         let (inbound, incoming) = tokio::sync::mpsc::channel(32);
         let (outgoing, mut outbound) = tokio::sync::mpsc::channel::<Packets>(32);
 
-        let connected = Arc::new(AtomicBool::new(true));
+        let (ctx, mut crx) = broadcast::channel(1);
 
         let (reader, writer) = socket.into_split();
 
         // Write to Client
-        let connected_clone = connected.clone();
-        tokio::spawn(async move {
-            while let Some(packet) = outbound.recv().await {
-                trace!("Sending packet: {}", packet.get_id());
-                let mut bytes = Vec::new();
-
-                let id = packet.get_id();
-
-                match packet {
-                    Packets::InternalNetworkDisconnect(packet) => {
-                        debug!("Disconnecting client: {}", String::from(packet.reason));
-                        connected_clone.store(false, std::sync::atomic::Ordering::Relaxed);
+        let mut crxc = crx.resubscribe();
+        let ctxc = ctx.clone();
+        let writer = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = crxc.recv() => {
+                        break;
                     }
-                    _ => {
-                        bytes.extend(packet.get_data());
-                    }
-                }
+                    packet = outbound.recv() => {
+                        if let Some(packet) = packet {
+                            trace!("Sending packet: {}", packet.get_id());
+                            let mut bytes = Vec::new();
 
-                let data =
-                    bincode::encode_to_vec(RawPacket { id, data: bytes }, BC_CONFIG).unwrap();
+                            let id = packet.get_id();
 
-                trace!("Sending {} bytes to client", data.len());
+                            match packet {
+                                Packets::InternalNetworkDisconnect(packet) => {
+                                    debug!("Disconnecting client: {}", String::from(packet.reason));
+                                    ctxc.send(true).unwrap();
+                                }
+                                _ => {
+                                    bytes.extend(packet.get_data());
+                                }
+                            }
 
-                let mut written = 0;
-                while written < data.len() {
-                    writer.writable().await.unwrap();
-                    match writer.try_write(&data[written..]) {
-                        Ok(n) => {
-                            trace!("Wrote {} bytes", n);
-                            written += n;
-                        }
-                        Err(e) => {
-                            error!("Error writing to connection: {}", e);
+                            let data =
+                                bincode::encode_to_vec(RawPacket { id, data: bytes }, BC_CONFIG).unwrap();
+
+                            trace!("Sending {} bytes to client", data.len());
+
+                            let mut written = 0;
+                            while written < data.len() {
+                                writer.writable().await.unwrap();
+                                match writer.try_write(&data[written..]) {
+                                    Ok(n) => {
+                                        trace!("Wrote {} bytes", n);
+                                        written += n;
+                                    }
+                                    Err(e) => {
+                                        error!("Error writing to connection: {}", e);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            connected_clone.store(false, std::sync::atomic::Ordering::Relaxed);
+            ctxc.send(true).unwrap();
         });
 
         // Read from Client
-        let connected_clone = connected.clone();
+        let ctxc = ctx.clone();
         let outgoing_clone = outgoing.clone();
-        tokio::spawn(async move {
+        let reader = tokio::spawn(async move {
             let mut state = ConnectionState::Handshake;
 
             // Buffer for reading data from the client
             let mut buffer = vec![0; CONFIG.network.advanced.buffer_size];
 
-            while connected_clone.load(std::sync::atomic::Ordering::Relaxed) {
-                reader.readable().await.unwrap();
+            'outer: loop {
+                tokio::select! {
+                    _ = crx.recv() => {
+                        break 'outer;
+                    }
+                    _ = reader.readable() => {
+                    }
+                }
 
                 let read = match reader.try_read(&mut buffer) {
                     Ok(0) => {
                         debug!("Connection closed");
-                        connected_clone.store(false, std::sync::atomic::Ordering::Relaxed);
+                        ctxc.send(true).unwrap();
                         0
                     }
                     Ok(n) => {
@@ -184,23 +203,22 @@ impl Connection {
             }
         });
 
-        let ogc = outgoing.clone();
-
         (
             Self {
-                outgoing,
-                connected,
+                //outgoing,
+                connected: ctx,
+                writer,
+                reader,
             },
-            ServerConnection {
-                incoming,
-                outgoing: ogc,
-            },
+            ServerConnection { incoming, outgoing },
         )
     }
 
-    pub async fn close(&mut self) {
-        self.connected
-            .store(false, std::sync::atomic::Ordering::Relaxed);
+    pub async fn destroy(self) {
+        self.connected.send(true).unwrap();
+
+        self.writer.await.unwrap();
+        self.reader.await.unwrap();
     }
 }
 

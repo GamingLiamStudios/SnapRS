@@ -85,8 +85,8 @@ impl NetworkManager {
             }
 
             // Close all connections
-            for (_, connection) in &mut connections {
-                connection.close().await;
+            while let Some((_, connection)) = connections.drain().next() {
+                connection.destroy().await;
             }
         }));
     }
