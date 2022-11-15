@@ -33,18 +33,26 @@ impl Connection {
         let (inbound, incoming) = tokio::sync::mpsc::channel(32);
         let (outgoing, mut outbound) = tokio::sync::mpsc::channel::<Packets>(32);
 
-        // NOTE: capacity 3 because *hopefully* max number of disconnect senders at one time
-        let (ctx, mut crx) = broadcast::channel(3);
+        // How did I get this number? Spamming 'Refresh' in the server list until I didn't get a LAGGED error
+        let (ctx, crx) = broadcast::channel(5);
+
+        // Probably isn't needed but just in case
+        // NOTE: Race Condition prevention
+        let crx1 = crx.resubscribe();
+        let crx2 = crx.resubscribe();
 
         let (reader, writer) = socket.into_split();
 
+        // TODO: Figure out what to do with recv/send errors
+
         // Write to Client
-        let mut crxc = crx.resubscribe();
         let ctxc = ctx.clone();
         let writer = tokio::spawn(async move {
+            let mut crx = crx1;
+            let ctx = ctxc;
             loop {
                 tokio::select! {
-                    _ = crxc.recv() => {
+                    _ = crx.recv() => {
                         break;
                     }
                     packet = outbound.recv() => {
@@ -57,7 +65,7 @@ impl Connection {
                             match packet {
                                 Packets::InternalNetworkDisconnect(packet) => {
                                     debug!("Disconnecting client: {}", String::from(packet.reason));
-                                    ctxc.send(true).unwrap();
+                                    ctx.send(true).unwrap();
                                 }
                                 _ => {
                                     bytes.extend(packet.get_data());
@@ -90,7 +98,8 @@ impl Connection {
                 }
             }
 
-            ctxc.send(true).unwrap();
+            // Shouldn't be needed
+            //ctx.send(true).unwrap();
         });
 
         // Read from Client
@@ -98,6 +107,9 @@ impl Connection {
         let outgoing_clone = outgoing.clone();
         let reader = tokio::spawn(async move {
             let mut state = ConnectionState::Handshake;
+
+            let mut crx = crx2;
+            let ctx = ctxc;
 
             // Buffer for reading data from the client
             let mut buffer = vec![0; CONFIG.network.advanced.buffer_size];
@@ -114,7 +126,7 @@ impl Connection {
                 let read = match reader.try_read(&mut buffer) {
                     Ok(0) => {
                         //trace!("Connection closed");
-                        ctxc.send(true).unwrap();
+                        ctx.send(true).unwrap();
                         0
                     }
                     Ok(n) => {
@@ -156,6 +168,12 @@ impl Connection {
 
                         reader.readable().await.unwrap();
                         match reader.try_read(&mut packet_bytes[(length - remain)..]) {
+                            Ok(0) => {
+                                //trace!("Connection closed");
+                                trace!("Connection close while reading packet");
+                                ctx.send(true).unwrap();
+                                break 'outer;
+                            }
                             Ok(n) => {
                                 trace!("Read {} bytes", n);
                                 remain -= n;
@@ -164,19 +182,8 @@ impl Connection {
                                 if e.kind() != std::io::ErrorKind::WouldBlock {
                                     error!("Error reading from connection: {}", e);
                                 }
-                                break;
                             }
                         }
-                    }
-
-                    {
-                        use std::io::Write;
-                        let mut file = std::fs::OpenOptions::new()
-                            .create(true)
-                            .write(true)
-                            .open("packets.bin")
-                            .unwrap();
-                        file.write_all(&packet_bytes).unwrap();
                     }
 
                     // TODO: Compression
@@ -207,14 +214,11 @@ impl Connection {
                     let packet = packet.unwrap();
 
                     if process_packet(&packet, &mut state, &outgoing_clone).await {
-                        inbound.send(packet).await.unwrap(); // FIXME: bruh
+                        inbound.send(packet).await.unwrap();
                     }
                 }
             }
         });
-
-        // TODO: Investigate possibility of race conditions
-        let crx = ctx.subscribe();
 
         (
             Self {
