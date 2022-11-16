@@ -2,13 +2,95 @@ pub(crate) mod types;
 
 use crate::config::BC_CONFIG;
 
-pub trait Packet {
-    fn get_id(&self) -> u8;
-    fn get_data(&self) -> Vec<u8>;
+macro_rules! packet {
+    {@ $decoder:ident $param:ident $type:ty, none} => {
+        let $param = <$type as bincode::Decode>::decode($decoder)?;
+    };
+    {@ $decoder:ident $param:ident $type:ty, remain} => {
+        todo!("Implement remain dec");
+    };
+    {@ $decoder:ident $param:ident $type:ty, $length:ident} => {
+        let mut $param = Vec::with_capacity(u32::from($length) as usize);
+        for _ in 0..u32::from($length) {
+            $param.push(<u8 as bincode::Decode>::decode($decoder)?);
+        }
+    };
+    {@ $encoder:ident $self:ident $param:ident none} => {
+        bincode::Encode::encode(&$self.$param, $encoder)?;
+    };
+    {@ $encoder:ident $self:ident $param:ident remain} => {
+        todo!("Implement remain enc");
+    };
+    {@ $encoder:ident $self:ident $param:ident $length:ident} => {
+        for b in &$self.$param {
+            bincode::Encode::encode(b, $encoder)?;
+        }
+    };
+    {@ $name:ident { } -> ($(pub $param:ident : $type:ty => $length:ident),* $(,)?)} => {
+        pub struct $name {
+            $(pub $param : $type),*
+        }
+        impl bincode::Decode for $name {
+            fn decode<D: bincode::de::Decoder>(
+                decoder: &mut D,
+            ) -> core::result::Result<Self, bincode::error::DecodeError> {
+                $(packet!{@ decoder $param $type, $length})*
+
+                Ok(Self {
+                    $($param),*
+                })
+            }
+        }
+        impl bincode::Encode for $name {
+            fn encode<E: bincode::enc::Encoder>(
+                &self,
+                encoder: &mut E,
+            ) -> core::result::Result<(), bincode::error::EncodeError> {
+                $(packet!{@ encoder self $param $length})*
+
+                Ok(())
+            }
+        }
+    };
+    {@ $name:ident { $param:ident : Bytes<remain>, $($rest:tt)* } -> ($($result:tt)*)} => {
+        packet! {
+            @ $name {
+                $($rest)*
+            } -> (
+                $($result)*
+                pub $param : Vec<u8> => remain,
+            )
+        }
+    };
+    {@ $name:ident { $param:ident : Bytes<$length:ident>, $($rest:tt)* } -> ($($result:tt)*)} => {
+        packet! {
+            @ $name {
+                $($rest)*
+            } -> (
+                $($result)*
+                pub $param : Vec<u8> => $length,
+            )
+        }
+    };
+    {@ $name:ident { $param:ident : $type:ty, $($rest:tt)* } -> ($($result:tt)*)} => {
+        packet! {
+            @ $name {
+                $($rest)*
+            } -> (
+                $($result)*
+                pub $param : $type => none,
+            )
+        }
+    };
+    ($name:ident { $( $param:ident : $type:tt $(<$inner:tt>)?, )* $(,)* }) => {
+        packet! {
+            @ $name { $($param : $type $(<$inner>)?,)* } -> ()
+        }
+    };
 }
 
 macro_rules! packets {
-    { $($dir:ident => { $($state:ident => { $($id:expr => $name:ident { $($inner:tt)* }),* }),* }),* } => {
+    { $($dir:ident => { $($state:ident => { $($id:expr => $name:ident { $($inner:tt)* } $(,)?)* }),* }),* } => {
         paste::paste! {
             #[allow(dead_code)]
             pub enum Packets {
@@ -41,7 +123,7 @@ macro_rules! packets {
                 fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                     write!(f, "Packets::")?;
                     match self {
-                        $($($(Self::[<$dir:camel $state:camel $name:camel>](..) => write!(f, "[<$dir:camel $state:camel $name:camel>]").unwrap(),)*)*)*
+                        $($($(Self::[<$dir:camel $state:camel $name:camel>](..) => write!(f, stringify!([<$dir:camel $state:camel $name:camel>])).unwrap(),)*)*)*
                     };
                     Ok(())
                 }
@@ -54,7 +136,7 @@ macro_rules! packets {
                         use crate::config::BC_CONFIG;
 
                         #[allow(unused_imports)]
-                        use crate::packets::{Packet, types::*};
+                        use crate::packets::types::*;
 
                         use log::error;
 
@@ -75,19 +157,7 @@ macro_rules! packets {
                             }
                         }
                         $(
-                            #[derive(bincode::Decode, bincode::Encode)]
-                            pub struct $name {
-                                $($inner)*
-                            }
-
-                            impl Packet for $name {
-                                fn get_id(&self) -> u8 {
-                                    $id
-                                }
-                                fn get_data(&self) -> Vec<u8> {
-                                    bincode::encode_to_vec(self, BC_CONFIG).unwrap()
-                                }
-                            }
+                            packet!( $name { $($inner)* } );
                         )*
                     }
 
@@ -135,26 +205,37 @@ packets! {
     Serverbound => {
         Handshaking => {
             0x00 => Handshake {
-                pub protocol_version: v32,
-                pub server_address: BoundedString<255>,
-                pub server_port: u16,
-                pub next_state: u8, // is technically a varint, but the valid range is within a u8
+                protocol_version: v32,
+                server_address: BoundedString<255>,
+                server_port: u16,
+                next_state: u8, // is technically a varint, but the valid range is within a u8
             }
         },
         Status => {
             0x00 => Request {},
             0x01 => Ping {
-                pub payload: i64
+                payload: i64,
+            }
+        },
+        Login => {
+            0x00 => LoginStart {
+                name: BoundedString<16>,
+            },
+            0x01 => EncryptionResponse {
+                shared_secret_length: v32,
+                shared_secret: Bytes<shared_secret_length>,
+                verify_token_length: v32,
+                verify_token: Bytes<verify_token_length>,
             }
         }
     },
     Clientbound => {
         Status => {
             0x00 => Response {
-                pub json_response: BoundedString<32767>
+                json_response: BoundedString<32767>,
             },
             0x01 => Pong {
-                pub payload: i64
+                payload: i64,
             }
         }
     },
@@ -163,7 +244,7 @@ packets! {
         },
         Network => {
             0x00 => Disconnect {
-                pub reason: BoundedString<32767>
+                reason: BoundedString<32767>,
             }
         }
     }

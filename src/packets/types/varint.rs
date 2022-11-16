@@ -7,11 +7,11 @@ pub struct v32 {
 }
 
 impl v32 {
-    pub fn read_from_vec(vec: &[u8]) -> Self {
+    pub fn read_from_slice(slice: &[u8]) -> Self {
         let mut value = 0;
 
         for i in (0..32).step_by(7) {
-            let b = vec[i / 7];
+            let b = slice[i / 7];
             value |= ((b & 0x7F) as u32) << i;
 
             if (b & 0x80) == 0 {
