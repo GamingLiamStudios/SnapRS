@@ -1,5 +1,9 @@
 use std::sync::Arc;
 
+use flate2::write::ZlibEncoder;
+use flate2::Compression;
+use std::io::prelude::*;
+
 use log::{debug, error, trace, warn};
 use tokio::net::TcpStream;
 use tokio::sync::RwLock;
@@ -23,7 +27,7 @@ pub struct ServerConnection {
 
 pub(crate) struct Connection {
     //pub(crate) outgoing: Sender<Packets>,
-    connected: broadcast::Sender<bool>,
+    connected: broadcast::Sender<(bool, String)>,
 
     writer: tokio::task::JoinHandle<()>,
     reader: tokio::task::JoinHandle<()>,
@@ -32,7 +36,7 @@ pub(crate) struct Connection {
 impl Connection {
     pub(crate) async fn new(
         socket: TcpStream,
-    ) -> (Self, ServerConnection, broadcast::Receiver<bool>) {
+    ) -> (Self, ServerConnection, broadcast::Receiver<(bool, String)>) {
         let (inbound, incoming) = tokio::sync::mpsc::channel(32);
         let (outgoing, mut outbound) = tokio::sync::mpsc::channel::<Packets>(32);
 
@@ -52,11 +56,11 @@ impl Connection {
 
         // Write to Client
         let ctxc = ctx.clone();
-        let mut cc = compressed.clone();
+        let cc = compressed.clone();
         let writer = tokio::spawn(async move {
             let mut crx = crx1;
             let ctx = ctxc;
-            let mut compressed = cc;
+            let compressed = cc;
             loop {
                 tokio::select! {
                     _ = crx.recv() => {
@@ -69,21 +73,59 @@ impl Connection {
 
                             let id = packet.get_id();
 
+                            let mut should_enable_compression = false; // TODO: Something better
                             match packet {
-                                Packets::InternalNetworkDisconnect(packet) => {
+                                Packets::ClientboundLoginDisconnect(packet) => {
+                                    bytes.extend(serial::encode_to_vec(packet.as_ref()).unwrap());
+
                                     debug!("Disconnecting client: {}", String::from(packet.reason.value));
-                                    ctx.send(true).unwrap();
+                                    ctx.send((true, "".to_string())).unwrap();
+                                }
+                                Packets::ClientboundLoginSetCompression(_) => {
+                                    should_enable_compression = true;
+                                    bytes.extend(packet.get_data());
                                 }
                                 _ => {
                                     bytes.extend(packet.get_data());
                                 }
                             }
 
+                            // Normal packet
                             let len = (bytes.len() + 1) as u32;
                             let mut data = Vec::with_capacity(bytes.len() + 1 + v32::byte_size(len));
                             data.extend(serial::encode_to_vec(&v32::from(len)).unwrap());
                             data.push(id);
                             data.extend(bytes);
+
+                            if *compressed.read().await {
+                                let mut compressed_len = 0;
+                                if len > CONFIG.network.advanced.compression_threshold {
+                                    let mut zlib = ZlibEncoder::new(Vec::new(), Compression::new(CONFIG.network.advanced.compression_level));
+                                    zlib.write_all(&data[v32::byte_size(len)..]).unwrap();
+                                    let compressed_data = zlib.finish().unwrap();
+
+                                    // If our compressed data is smaller, use it
+                                    if compressed_data.len() < len as usize {
+                                        compressed_len = compressed_data.len() as u32;
+                                        data = compressed_data;
+                                    }
+                                }
+
+                                // Compressed packet
+                                let len = data.len() + v32::byte_size(compressed_len);
+                                let mut bytes = Vec::with_capacity(v32::byte_size(len as u32) + len);
+                                bytes.extend(serial::encode_to_vec(&v32::from(len as u32)).unwrap());
+                                bytes.extend(serial::encode_to_vec(&v32::from(compressed_len)).unwrap());
+                                bytes.extend(data);
+
+                                data = bytes;
+                            }
+
+                            if data.len() > 2097151 {
+                                error!("Packet too large! {}", data.len());
+                                ctx.send((true, format!("Server tried sending Packet size {}", data.len()))).unwrap();
+                                continue;
+                            }
 
                             trace!("Sending {} bytes to client", data.len());
 
@@ -102,6 +144,10 @@ impl Connection {
                                         break;
                                     }
                                 }
+                            }
+
+                            if should_enable_compression {
+                                *compressed.write().await = true;
                             }
                         }
                     }
@@ -136,7 +182,7 @@ impl Connection {
                 let read = match reader.try_read(&mut buffer) {
                     Ok(0) => {
                         //trace!("Connection closed");
-                        ctx.send(true).unwrap();
+                        ctx.send((true, "".to_string())).unwrap();
                         0
                     }
                     Ok(n) => {
@@ -153,7 +199,8 @@ impl Connection {
 
                 let mut index = 0;
                 while index < read {
-                    let (length, lsize) = v32::read_from_slice(&buffer[index..]);
+                    let (length, lsize) =
+                        serial::decode_from_slice::<v32>(&buffer[index..]).unwrap();
                     let length = u32::from(length) as usize + lsize;
 
                     let mut packet_bytes = Vec::with_capacity(length);
@@ -179,8 +226,8 @@ impl Connection {
                         match reader.try_read(&mut packet_bytes[(length - remain)..]) {
                             Ok(0) => {
                                 //trace!("Connection closed");
-                                trace!("Connection close while reading packet");
-                                ctx.send(true).unwrap();
+                                warn!("Connection close while reading packet");
+                                ctx.send((true, "".to_string())).unwrap();
                                 break 'outer;
                             }
                             Ok(n) => {
@@ -259,7 +306,9 @@ impl Connection {
             return;
         }
 
-        self.connected.send(true).unwrap();
+        self.connected
+            .send((true, "Connection Closed by Server".to_string()))
+            .unwrap();
 
         self.writer.await.unwrap();
         self.reader.await.unwrap();
@@ -271,7 +320,7 @@ async fn process_packet(
     packet: &Packets,
     state: &mut ConnectionState,
     outgoing: &Sender<Packets>,
-    close_sender: &broadcast::Sender<bool>,
+    close_sender: &broadcast::Sender<(bool, String)>,
 ) -> bool {
     match packet {
         Packets::ServerboundHandshakingHandshake(packet) => {
@@ -282,7 +331,7 @@ async fn process_packet(
                     "Client attempted connection with Unsupported Protocol Version {}",
                     u32::from(packet.protocol_version)
                 );
-                close_sender.send(true).unwrap();
+                close_sender.send((true, "".to_string())).unwrap();
             }
 
             *state = packet.next_state.into();
@@ -362,6 +411,14 @@ async fn process_packet(
                 "Client with username '{}' attempting connection",
                 packet.name
             );
+            outgoing
+                .send(Packets::from(
+                    packets::clientbound::login_packets::SetCompression {
+                        threshold: v32::from(CONFIG.network.advanced.compression_threshold),
+                    },
+                ))
+                .await
+                .unwrap();
         }
         _ => {
             return true;

@@ -13,3 +13,6 @@ max_players = 20
 [network.advanced]
 buffer_size = 1024
 buffered_packets = 32
+
+compression_threshold = 256
+compression_level = 9 # 0 being no compression(fastest), 9 being the best compression(slowest)

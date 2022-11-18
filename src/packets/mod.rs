@@ -216,13 +216,13 @@ packets! {
                 server_address: BoundedString<255>,
                 server_port: u16,
                 next_state: u8, // is technically a varint, but the valid range is within a u8
-            }
+            },
         },
         Status => {
             0x00 => Request {},
             0x01 => Ping {
                 payload: i64,
-            }
+            },
         },
         Login => {
             0x00 => LoginStart {
@@ -233,7 +233,7 @@ packets! {
                 shared_secret: Vec<u8, shared_secret_length>,
                 verify_token_length: v32,
                 verify_token: Vec<u8, verify_token_length>,
-            }
+            },
         }
     },
     Clientbound => {
@@ -243,7 +243,7 @@ packets! {
             },
             0x01 => Pong {
                 payload: i64,
-            }
+            },
         },
         Login => {
             0x00 => Disconnect {
@@ -262,16 +262,18 @@ packets! {
             },
             0x03 => SetCompression {
                 threshold: v32,
-            }
+            },
+        },
+        Play => {
+            0x19 => Disconnect {
+                reason: Chat,
+            },
         }
     },
     Internal => {
         Client => {
         },
         Network => {
-            0x00 => Disconnect {
-                reason: Chat,
-            }
         }
     }
 }

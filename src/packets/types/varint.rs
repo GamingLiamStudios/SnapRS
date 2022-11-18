@@ -7,25 +7,7 @@ pub struct v32 {
 }
 
 impl v32 {
-    pub fn read_from_slice(slice: &[u8]) -> (Self, usize) {
-        let mut value = 0;
-
-        for i in (0..32).step_by(7) {
-            if slice.len() <= i / 7 {
-                panic!("Not enough bytes to read v32");
-            }
-            let b = slice[i / 7];
-            value |= ((b & 0x7F) as u32) << i;
-
-            if (b & 0x80) == 0 {
-                return (Self { value }, (i / 7) + 1);
-            }
-        }
-
-        panic!("Varint too big");
-    }
-
-    pub fn byte_size(val: u32) -> usize {
+    pub const fn byte_size(val: u32) -> usize {
         match val {
             0..=0x7F => 1,
             0x80..=0x3FFF => 2,

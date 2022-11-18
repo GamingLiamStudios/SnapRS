@@ -80,6 +80,9 @@ pub struct NetworkConfig {
 pub struct AdvancedNetworkConfig {
     pub buffer_size: usize,
     pub buffered_packets: usize,
+
+    pub compression_threshold: u32,
+    pub compression_level: u32,
 }
 
 #[derive(Serialize, Deserialize)]
