@@ -71,7 +71,7 @@ impl Connection {
 
                             match packet {
                                 Packets::InternalNetworkDisconnect(packet) => {
-                                    debug!("Disconnecting client: {}", String::from(packet.reason));
+                                    debug!("Disconnecting client: {}", String::from(packet.reason.value));
                                     ctx.send(true).unwrap();
                                 }
                                 _ => {

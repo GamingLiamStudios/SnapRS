@@ -18,7 +18,9 @@ macro_rules! packet {
         serial::Encode::encode(&$self.$param, $encoder)?;
     };
     {@ $encoder:ident $self:ident $param:ident remain} => {
-        todo!("Implement remain enc");
+        for b in &$self.$param {
+            serial::Encode::encode(b, $encoder)?;
+        }
     };
     {@ $encoder:ident $self:ident $param:ident $length:ident} => {
         for b in &$self.$param {
@@ -46,23 +48,23 @@ macro_rules! packet {
             }
         }
     };
-    {@ $name:ident { $param:ident : Bytes<remain>, $($rest:tt)* } -> ($($result:tt)*)} => {
+    {@ $name:ident { $param:ident : Vec<$type:ty, remain>, $($rest:tt)* } -> ($($result:tt)*)} => {
         packet! {
             @ $name {
                 $($rest)*
             } -> (
                 $($result)*
-                pub $param : Vec<u8> => remain,
+                pub $param : Vec<$type> => remain,
             )
         }
     };
-    {@ $name:ident { $param:ident : Bytes<$length:ident>, $($rest:tt)* } -> ($($result:tt)*)} => {
+    {@ $name:ident { $param:ident : Vec<$type:ty, $length:ident>, $($rest:tt)* } -> ($($result:tt)*)} => {
         packet! {
             @ $name {
                 $($rest)*
             } -> (
                 $($result)*
-                pub $param : Vec<u8> => $length,
+                pub $param : Vec<$type> => $length,
             )
         }
     };
@@ -76,9 +78,9 @@ macro_rules! packet {
             )
         }
     };
-    ($name:ident { $( $param:ident : $type:tt $(<$inner:tt>)?, )* $(,)* }) => {
+    ($name:ident { $( $param:ident : $type:tt $(<$inner:tt $(, $length:ident)?>)?, )* $(,)* }) => {
         packet! {
-            @ $name { $($param : $type $(<$inner>)?,)* } -> ()
+            @ $name { $($param : $type $(<$inner $(, $length)?>)?,)* } -> ()
         }
     };
 }
@@ -228,9 +230,9 @@ packets! {
             },
             0x01 => EncryptionResponse {
                 shared_secret_length: v32,
-                shared_secret: Bytes<shared_secret_length>,
+                shared_secret: Vec<u8, shared_secret_length>,
                 verify_token_length: v32,
-                verify_token: Bytes<verify_token_length>,
+                verify_token: Vec<u8, verify_token_length>,
             }
         }
     },
@@ -245,14 +247,14 @@ packets! {
         },
         Login => {
             0x00 => Disconnect {
-                reason: BoundedString<32767>,
+                reason: Chat,
             },
             0x01 => EncryptionRequest {
                 server_id: BoundedString<20>, // Appears to be empty/unused
                 public_key_length: v32,
-                public_key: Bytes<public_key_length>,
+                public_key: Vec<u8, public_key_length>,
                 verify_token_length: v32,
-                verify_token: Bytes<verify_token_length>,
+                verify_token: Vec<u8, verify_token_length>,
             },
             0x02 => LoginSuccess {
                 uuid: BoundedString<36>,
@@ -268,7 +270,7 @@ packets! {
         },
         Network => {
             0x00 => Disconnect {
-                reason: BoundedString<32767>,
+                reason: Chat,
             }
         }
     }

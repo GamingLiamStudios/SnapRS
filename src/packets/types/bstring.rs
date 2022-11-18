@@ -3,7 +3,7 @@ use crate::packets::serial;
 use super::v32;
 
 pub struct BoundedString<const L: usize> {
-    value: String,
+    pub(super) value: String,
 }
 
 /// Serialization
@@ -29,7 +29,7 @@ impl<const L: usize> serial::Decode for BoundedString<L> {
             bytes.push(serial::Decode::decode(decoder)?);
         }
 
-        let value = String::from_utf8(bytes).map_err(|e| serial::DecodeError::InvalidData)?; // Should be fine?
+        let value = String::from_utf8(bytes).map_err(|_| serial::DecodeError::InvalidData)?; // Should be fine?
         Ok(BoundedString::<L>::from(value))
     }
 }

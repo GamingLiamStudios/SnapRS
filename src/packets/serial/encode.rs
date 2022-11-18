@@ -83,7 +83,7 @@ impl Encode for f64 {
 
 impl Encode for bool {
     fn encode(&self, encoder: &mut Encoder) -> Result<(), EncodeError> {
-        encoder.buffer.push(if *self { 1 } else { 0 });
+        encoder.buffer.push(u8::from(*self));
         Ok(())
     }
 }
