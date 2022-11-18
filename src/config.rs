@@ -3,8 +3,6 @@ use std::io::Write;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 
-use bincode::config::{BigEndian, Configuration, Fixint, SkipFixedArrayLength};
-
 #[derive(Clone, Copy)]
 pub struct LogLevel {
     level: log::LevelFilter,
@@ -53,12 +51,6 @@ impl<'de> Deserialize<'de> for LogLevel {
 lazy_static! {
     pub static ref CONFIG: Config = Config::load("config.toml");
 }
-
-pub static BC_CONFIG: Configuration<BigEndian, Fixint, SkipFixedArrayLength> =
-    bincode::config::standard()
-        .with_big_endian()
-        .with_fixed_int_encoding()
-        .skip_fixed_array_length();
 
 #[derive(Serialize, Deserialize)]
 pub struct Config {

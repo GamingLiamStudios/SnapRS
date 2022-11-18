@@ -19,7 +19,6 @@ lazy_static = "1.4" # TODO: Remove this once LazyLock is in stable
 
 # Network
 slotmap = "1.0"
-bincode = "2.0.0-rc.2"
 paste = "1.0"
 
 tokio = {version = "1.21", features = ["full"]}

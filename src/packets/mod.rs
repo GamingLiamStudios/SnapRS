@@ -1,10 +1,9 @@
-pub(crate) mod types;
-
-use crate::config::BC_CONFIG;
+pub mod serial;
+pub mod types;
 
 macro_rules! packet {
     {@ $decoder:ident $param:ident $type:ty, none} => {
-        let $param = <$type as bincode::Decode>::decode($decoder)?;
+        let $param = <$type as serial::Decode>::decode($decoder)?;
     };
     {@ $decoder:ident $param:ident $type:ty, remain} => {
         todo!("Implement remain dec");
@@ -12,41 +11,36 @@ macro_rules! packet {
     {@ $decoder:ident $param:ident $type:ty, $length:ident} => {
         let mut $param = Vec::with_capacity(u32::from($length) as usize);
         for _ in 0..u32::from($length) {
-            $param.push(<u8 as bincode::Decode>::decode($decoder)?);
+            $param.push(<u8 as serial::Decode>::decode($decoder)?);
         }
     };
     {@ $encoder:ident $self:ident $param:ident none} => {
-        bincode::Encode::encode(&$self.$param, $encoder)?;
+        serial::Encode::encode(&$self.$param, $encoder)?;
     };
     {@ $encoder:ident $self:ident $param:ident remain} => {
         todo!("Implement remain enc");
     };
     {@ $encoder:ident $self:ident $param:ident $length:ident} => {
         for b in &$self.$param {
-            bincode::Encode::encode(b, $encoder)?;
+            serial::Encode::encode(b, $encoder)?;
         }
     };
     {@ $name:ident { } -> ($(pub $param:ident : $type:ty => $length:ident),* $(,)?)} => {
         pub struct $name {
             $(pub $param : $type),*
         }
-        impl bincode::Decode for $name {
-            fn decode<D: bincode::de::Decoder>(
-                decoder: &mut D,
-            ) -> core::result::Result<Self, bincode::error::DecodeError> {
-                $(packet!{@ decoder $param $type, $length})*
+        impl serial::Decode for $name {
+            fn decode(_decoder: &mut serial::Decoder) -> Result<Self, serial::DecodeError> {
+                $(packet!{@ _decoder $param $type, $length})*
 
                 Ok(Self {
                     $($param),*
                 })
             }
         }
-        impl bincode::Encode for $name {
-            fn encode<E: bincode::enc::Encoder>(
-                &self,
-                encoder: &mut E,
-            ) -> core::result::Result<(), bincode::error::EncodeError> {
-                $(packet!{@ encoder self $param $length})*
+        impl serial::Encode for $name {
+            fn encode(&self, _encoder: &mut serial::Encoder) -> Result<(), serial::EncodeError> {
+                $(packet!{@ _encoder self $param $length})*
 
                 Ok(())
             }
@@ -114,7 +108,7 @@ macro_rules! packets {
 
                 pub fn get_data(&self) -> Vec<u8> {
                     match self {
-                        $($($(Self::[<$dir:camel $state:camel $name:camel>](packet) => bincode::encode_to_vec(&packet, BC_CONFIG).unwrap(),)*)*)*
+                        $($($(Self::[<$dir:camel $state:camel $name:camel>](packet) => serial::encode_to_vec(packet.as_ref()).unwrap(),)*)*)*
                     }
                 }
             }
@@ -133,8 +127,6 @@ macro_rules! packets {
                 $(
                     pub use [<$state:lower _packets>]::decode_packet as [<decode_ $state:lower>];
                     pub mod [<$state:lower _packets>] {
-                        use crate::config::BC_CONFIG;
-
                         #[allow(unused_imports)]
                         use crate::packets::types::*;
 
@@ -142,11 +134,13 @@ macro_rules! packets {
 
                         use super::super::Packets;
 
+                        use super::super::serial;
+
                         pub fn decode_packet(id: u8, data: Vec<u8>) -> Option<Packets> {
                             match id {
                                 $(
                                     $id => {
-                                        let (packet, _) = bincode::decode_from_slice::<$name, _>(data.as_slice(), BC_CONFIG).unwrap();
+                                        let (packet, _) = serial::decode_from_slice::<$name>(data.as_slice()).unwrap();
                                         Some(Packets::[<$dir:camel $state:camel $name:camel>](Box::new(packet)))
                                     },
                                 )*
@@ -170,12 +164,23 @@ macro_rules! packets {
 // TODO: Get these in the macro somehow
 
 // Won't actually ever be serialized. Just used for the macro to be happy
-#[derive(bincode::Decode, bincode::Encode, Copy, Clone)]
 pub enum PacketState {
     Handshake,
     Status,
     Login,
     Play,
+}
+
+impl serial::Decode for PacketState {
+    fn decode(decoder: &mut serial::Decoder) -> Result<Self, serial::DecodeError> {
+        Ok(<u8 as serial::Decode>::decode(decoder)?.into())
+    }
+}
+
+impl serial::Encode for PacketState {
+    fn encode(&self, encoder: &mut serial::Encoder) -> Result<(), serial::EncodeError> {
+        <u8 as serial::Encode>::encode(&u8::from(self), encoder)
+    }
 }
 
 impl From<u8> for PacketState {
@@ -190,8 +195,8 @@ impl From<u8> for PacketState {
     }
 }
 
-impl From<PacketState> for u8 {
-    fn from(state: PacketState) -> Self {
+impl From<&PacketState> for u8 {
+    fn from(state: &PacketState) -> Self {
         match state {
             PacketState::Handshake => 0,
             PacketState::Status => 1,
@@ -237,6 +242,25 @@ packets! {
             0x01 => Pong {
                 payload: i64,
             }
+        },
+        Login => {
+            0x00 => Disconnect {
+                reason: BoundedString<32767>,
+            },
+            0x01 => EncryptionRequest {
+                server_id: BoundedString<20>, // Appears to be empty/unused
+                public_key_length: v32,
+                public_key: Bytes<public_key_length>,
+                verify_token_length: v32,
+                verify_token: Bytes<verify_token_length>,
+            },
+            0x02 => LoginSuccess {
+                uuid: BoundedString<36>,
+                username: BoundedString<16>,
+            },
+            0x03 => SetCompression {
+                threshold: v32,
+            }
         }
     },
     Internal => {
@@ -250,18 +274,8 @@ packets! {
     }
 }
 
-impl bincode::Decode for Packets {
-    fn decode<D: bincode::de::Decoder>(
-        _decoder: &mut D,
-    ) -> core::result::Result<Self, bincode::error::DecodeError> {
+impl serial::Decode for Packets {
+    fn decode(_decoder: &mut serial::Decoder) -> Result<Self, serial::DecodeError> {
         panic!("Decode is not implemented for Packets");
-    }
-}
-
-impl<'de> bincode::BorrowDecode<'de> for Packets {
-    fn borrow_decode<D: bincode::de::BorrowDecoder<'de>>(
-        _decoder: &mut D,
-    ) -> core::result::Result<Self, bincode::error::DecodeError> {
-        panic!("BorrowDecode is not implemented for Packets");
     }
 }

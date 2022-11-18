@@ -1,9 +1,10 @@
-use log::{debug, error, trace};
-use tokio::net::TcpStream;
+use std::sync::Arc;
 
-use crate::config::BC_CONFIG;
-use crate::network::raw_packet::RawPacket;
-use crate::packets;
+use log::{debug, error, trace, warn};
+use tokio::net::TcpStream;
+use tokio::sync::RwLock;
+
+use crate::packets::{self, serial};
 use crate::{config::CONFIG, packets::Packets};
 
 use crate::packets::types::{v32, BoundedString, ConnectionState};
@@ -13,6 +14,8 @@ use tokio::sync::{
     mpsc::{Receiver, Sender},
 };
 
+const PROTOCOL_VERSION: u32 = 754;
+
 pub struct ServerConnection {
     pub incoming: Receiver<Packets>,
     pub outgoing: Sender<Packets>,
@@ -20,7 +23,7 @@ pub struct ServerConnection {
 
 pub(crate) struct Connection {
     //pub(crate) outgoing: Sender<Packets>,
-    pub(crate) connected: broadcast::Sender<bool>,
+    connected: broadcast::Sender<bool>,
 
     writer: tokio::task::JoinHandle<()>,
     reader: tokio::task::JoinHandle<()>,
@@ -43,13 +46,17 @@ impl Connection {
 
         let (reader, writer) = socket.into_split();
 
+        let mut compressed = Arc::new(RwLock::new(false));
+
         // TODO: Figure out what to do with recv/send errors
 
         // Write to Client
         let ctxc = ctx.clone();
+        let mut cc = compressed.clone();
         let writer = tokio::spawn(async move {
             let mut crx = crx1;
             let ctx = ctxc;
+            let mut compressed = cc;
             loop {
                 tokio::select! {
                     _ = crx.recv() => {
@@ -72,8 +79,11 @@ impl Connection {
                                 }
                             }
 
-                            let data =
-                                bincode::encode_to_vec(RawPacket { id, data: bytes }, BC_CONFIG).unwrap();
+                            let len = (bytes.len() + 1) as u32;
+                            let mut data = Vec::with_capacity(bytes.len() + 1 + v32::byte_size(len));
+                            data.extend(serial::encode_to_vec(&v32::from(len)).unwrap());
+                            data.push(id);
+                            data.extend(bytes);
 
                             trace!("Sending {} bytes to client", data.len());
 
@@ -143,9 +153,8 @@ impl Connection {
 
                 let mut index = 0;
                 while index < read {
-                    let (length, size) =
-                        bincode::decode_from_slice::<v32, _>(&buffer[index..], BC_CONFIG).unwrap();
-                    let length = u32::from(length) as usize + size;
+                    let (length, lsize) = v32::read_from_slice(&buffer[index..]);
+                    let length = u32::from(length) as usize + lsize;
 
                     let mut packet_bytes = Vec::with_capacity(length);
 
@@ -161,7 +170,7 @@ impl Connection {
 
                     // Same reason as above
                     // SAFETY: length <= packet_bytes.capacity()
-                    unsafe { packet_bytes.set_len(length) };
+                    packet_bytes.resize(length, 0);
 
                     while remain > 0 {
                         trace!("Packet incomplete. {} bytes remaining", remain);
@@ -188,32 +197,42 @@ impl Connection {
 
                     // TODO: Compression
                     // TODO: Encryption
-                    let (raw, rsize) =
-                        bincode::decode_from_slice::<RawPacket, _>(&packet_bytes, BC_CONFIG)
-                            .unwrap();
-                    //index += rsize;
+                    let id = packet_bytes[lsize];
+                    let data = &packet_bytes[lsize + 1..];
+                    //index += packet_bytes.len();
 
                     let packet = match state {
                         ConnectionState::Handshake => packets::serverbound::decode_handshaking(
-                            u32::from(raw.id) as u8,
-                            raw.data,
+                            u32::from(id) as u8,
+                            data.to_vec(),
                         ),
                         ConnectionState::Status => {
-                            packets::serverbound::decode_status(u32::from(raw.id) as u8, raw.data)
+                            packets::serverbound::decode_status(u32::from(id) as u8, data.to_vec())
+                        }
+                        ConnectionState::Login => {
+                            packets::serverbound::decode_login(u32::from(id) as u8, data.to_vec())
                         }
                         _ => None,
                     };
 
                     if packet.is_none() {
-                        error!("Unknown packet: id {} size {}", u32::from(raw.id), rsize);
+                        error!(
+                            "Unknown packet: id {} size {}",
+                            u32::from(id),
+                            packet_bytes.len()
+                        );
                         continue;
                     } else {
-                        debug!("Received packet: id {} size {}", u32::from(raw.id), rsize);
+                        debug!(
+                            "Received packet: id {} size {}",
+                            u32::from(id),
+                            packet_bytes.len()
+                        );
                     }
 
                     let packet = packet.unwrap();
 
-                    if process_packet(&packet, &mut state, &outgoing_clone).await {
+                    if process_packet(&packet, &mut state, &outgoing_clone, &ctx).await {
                         inbound.send(packet).await.unwrap();
                     }
                 }
@@ -252,13 +271,20 @@ async fn process_packet(
     packet: &Packets,
     state: &mut ConnectionState,
     outgoing: &Sender<Packets>,
+    close_sender: &broadcast::Sender<bool>,
 ) -> bool {
     match packet {
         Packets::ServerboundHandshakingHandshake(packet) => {
-            debug!(
-                "Client connected with protocol version {}",
-                u32::from(packet.protocol_version)
-            );
+            let ver = u32::from(packet.protocol_version);
+            debug!("Client connected with protocol version {}", ver);
+            if ver > PROTOCOL_VERSION && packet.next_state != 1 {
+                warn!(
+                    "Client attempted connection with Unsupported Protocol Version {}",
+                    u32::from(packet.protocol_version)
+                );
+                close_sender.send(true).unwrap();
+            }
+
             *state = packet.next_state.into();
         }
         Packets::ServerboundStatusRequest(_) => {
@@ -330,6 +356,12 @@ async fn process_packet(
                 }))
                 .await
                 .unwrap();
+        }
+        Packets::ServerboundLoginLoginStart(packet) => {
+            debug!(
+                "Client with username '{}' attempting connection",
+                packet.name
+            );
         }
         _ => {
             return true;
