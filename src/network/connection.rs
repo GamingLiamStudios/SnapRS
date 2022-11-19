@@ -1,17 +1,18 @@
 use std::sync::Arc;
 
-use flate2::write::ZlibEncoder;
-use flate2::Compression;
+use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
 use std::io::prelude::*;
 
 use log::{debug, error, trace, warn};
 use tokio::net::TcpStream;
 use tokio::sync::RwLock;
 
-use crate::packets::{self, serial};
-use crate::{config::CONFIG, packets::Packets};
+use crate::{
+    config::CONFIG,
+    packets::{self, serial, Packets},
+};
 
-use crate::packets::types::{v32, BoundedString, ConnectionState};
+use crate::packets::types::*;
 
 use tokio::sync::{
     broadcast,
@@ -50,7 +51,7 @@ impl Connection {
 
         let (reader, writer) = socket.into_split();
 
-        let mut compressed = Arc::new(RwLock::new(false));
+        let compressed = Arc::new(RwLock::new(false));
 
         // TODO: Figure out what to do with recv/send errors
 
@@ -146,6 +147,10 @@ impl Connection {
                                 }
                             }
 
+                            /*
+                                As SetCompression is never recieved and packets are only compressed AFTER,
+                                we *shouldn't* have to worry about syncing this with the reader.
+                            */
                             if should_enable_compression {
                                 *compressed.write().await = true;
                             }
@@ -167,6 +172,8 @@ impl Connection {
             let mut crx = crx2;
             let ctx = ctxc;
 
+            // Take ownership of 'compressed' as it is not used after this is spawned.
+
             // Buffer for reading data from the client
             let mut buffer = vec![0; CONFIG.network.advanced.buffer_size];
 
@@ -179,6 +186,7 @@ impl Connection {
                     }
                 }
 
+                // TODO: Encryption
                 let read = match reader.try_read(&mut buffer) {
                     Ok(0) => {
                         //trace!("Connection closed");
@@ -201,7 +209,8 @@ impl Connection {
                 while index < read {
                     let (length, lsize) =
                         serial::decode_from_slice::<v32>(&buffer[index..]).unwrap();
-                    let length = u32::from(length) as usize + lsize;
+                    let length = u32::from(length) as usize;
+                    index += lsize;
 
                     let mut packet_bytes = Vec::with_capacity(length);
 
@@ -242,10 +251,31 @@ impl Connection {
                         }
                     }
 
-                    // TODO: Compression
-                    // TODO: Encryption
-                    let id = packet_bytes[lsize];
-                    let data = &packet_bytes[lsize + 1..];
+                    let id;
+                    let data;
+
+                    if *compressed.read().await {
+                        let (compressed_len, clsize) =
+                            serial::decode_from_slice::<v32>(&packet_bytes).unwrap();
+                        let compressed_len = u32::from(compressed_len) as usize;
+
+                        if compressed_len > 0 {
+                            let mut bytes = ZlibDecoder::new(&packet_bytes[clsize..]).bytes();
+                            id = bytes.next().unwrap().unwrap();
+
+                            let mut d = bytes.map(|x| x.unwrap()).collect::<Vec<u8>>();
+                            d.shrink_to(compressed_len);
+                            data = d;
+                        } else {
+                            // Start with index of 1 as the expected clsize(0) is guaranteed to be 1 byte.
+                            id = packet_bytes[1];
+                            data = packet_bytes[2..].to_vec();
+                        }
+                    } else {
+                        id = packet_bytes[0];
+                        data = packet_bytes[1..].to_vec();
+                    }
+
                     //index += packet_bytes.len();
 
                     let packet = match state {

@@ -138,6 +138,8 @@ macro_rules! packets {
 
                         use super::super::serial;
 
+                        // This is being used elsewhere. Clientbound decodes aren't being used however, so Clippy complains about those.
+                        #[allow(dead_code)]
                         pub fn decode_packet(id: u8, data: Vec<u8>) -> Option<Packets> {
                             match id {
                                 $(
@@ -268,12 +270,6 @@ packets! {
             0x19 => Disconnect {
                 reason: Chat,
             },
-        }
-    },
-    Internal => {
-        Client => {
-        },
-        Network => {
         }
     }
 }
