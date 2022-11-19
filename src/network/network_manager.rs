@@ -75,8 +75,8 @@ impl NetworkManager {
 
                                 // Disconnect listening
                                 df.push(tokio::spawn(async move {
-                                    disconnect_future.recv().await.expect("Go yell at GLS or make a PR if you see this. Error: DF_LAG");
-                                    key
+                                    let (_, reason) = disconnect_future.recv().await.expect("Go yell at GLS or make a PR if you see this. Error: DF_LAG");
+                                    (key, reason)
                                 }));
 
                                 trace!("Connection Accepted. Total: {}", connections.len());
@@ -86,9 +86,13 @@ impl NetworkManager {
                             }
                         }
                     }
-                    Some(Ok(key)) = df.next() => {
+                    Some(Ok((key, reason))) = df.next() => {
                         connections.remove(key);
-                        trace!("Connection Closed. Total: {}", connections.len());
+                        if reason.is_empty() {
+                            trace!("Connection Closed. Total: {}", connections.len());
+                        } else {
+                            trace!("Connection Closed. Reason: {}. Total: {}", reason, connections.len());
+                        }
                     }
                 }
             }
