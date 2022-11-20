@@ -168,6 +168,7 @@ macro_rules! packets {
 // TODO: Get these in the macro somehow
 
 // Won't actually ever be serialized. Just used for the macro to be happy
+#[derive(PartialEq, Eq)]
 pub enum PacketState {
     Handshake,
     Status,
@@ -269,6 +270,16 @@ packets! {
         Play => {
             0x19 => Disconnect {
                 reason: Chat,
+            },
+        }
+    },
+    Internal => {
+        Server => {
+            0x00 => Initalize {},
+        },
+        Network => {
+            0x00 => Disconnect {
+                reason: BoundedString<32767>,
             },
         }
     }

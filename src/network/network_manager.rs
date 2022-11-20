@@ -44,7 +44,7 @@ impl NetworkManager {
         let (ctx, mut crx) = tokio::sync::mpsc::channel(1);
         self.connected = Some(ctx);
 
-        let _server_connections = self.connections.clone();
+        let server_connections = self.connections.clone();
 
         self.listener_thread = Some(tokio::task::spawn(async move {
             let listener = TcpListener::bind(format!("127.0.0.1:{}", CONFIG.network.port))
@@ -54,6 +54,7 @@ impl NetworkManager {
             let mut connections = SlotMap::with_capacity(CONFIG.network.max_players);
 
             let mut df = futures::stream::FuturesUnordered::new();
+            let mut cf = futures::stream::FuturesUnordered::new();
 
             // Handle all incoming connections
             loop {
@@ -69,14 +70,22 @@ impl NetworkManager {
                                 // Configure TCP Stream
                                 socket.set_nodelay(true).unwrap();
 
-                                let (connection, _srv_con, mut disconnect_future) = Connection::new(socket).await;
+                                let (connection, mut srv_con, mut disconnect_future) = Connection::new(socket).await;
 
                                 let key = connections.insert(connection);
 
                                 // Disconnect listening
                                 df.push(tokio::spawn(async move {
-                                    let (_, reason) = disconnect_future.recv().await.expect("Go yell at GLS or make a PR if you see this. Error: DF_LAG");
+                                    let reason = disconnect_future.recv().await.expect("Go yell at GLS or make a PR if you see this. Error: DF_LAG");
                                     (key, reason)
+                                }));
+                                cf.push(tokio::spawn(async move {
+                                    let opt = srv_con.incoming.recv().await;
+                                    if opt.is_some() {
+                                        Some(srv_con)
+                                    } else {
+                                        None
+                                    }
                                 }));
 
                                 trace!("Connection Accepted. Total: {}", connections.len());
@@ -94,10 +103,15 @@ impl NetworkManager {
                             trace!("Connection Closed. Reason: {}. Total: {}", reason, connections.len());
                         }
                     }
+                    Some(Ok(connection)) = cf.next() => {
+                        if let Some(connection) = connection {
+                            let mut server_connections = server_connections.lock().await;
+                            server_connections.insert(connection);
+                            trace!("Connection Registered. Total: {}", server_connections.len());
+                        }
+                    }
                 }
             }
-
-            // TODO: Push connection to server_connections once it is fully connected
 
             // Close all connections
             while let Some((_, connection)) = connections.drain().next() {

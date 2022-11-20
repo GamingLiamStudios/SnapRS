@@ -28,7 +28,7 @@ pub struct ServerConnection {
 
 pub(crate) struct Connection {
     //pub(crate) outgoing: Sender<Packets>,
-    connected: broadcast::Sender<(bool, String)>,
+    connected: broadcast::Sender<String>,
 
     writer: tokio::task::JoinHandle<()>,
     reader: tokio::task::JoinHandle<()>,
@@ -37,7 +37,7 @@ pub(crate) struct Connection {
 impl Connection {
     pub(crate) async fn new(
         socket: TcpStream,
-    ) -> (Self, ServerConnection, broadcast::Receiver<(bool, String)>) {
+    ) -> (Self, ServerConnection, broadcast::Receiver<String>) {
         let (inbound, incoming) = tokio::sync::mpsc::channel(32);
         let (outgoing, mut outbound) = tokio::sync::mpsc::channel::<Packets>(32);
 
@@ -51,109 +51,149 @@ impl Connection {
 
         let (reader, writer) = socket.into_split();
 
+        // Connection States
         let compressed = Arc::new(RwLock::new(false));
+        let state = Arc::new(RwLock::new(ConnectionState::Handshake));
 
         // TODO: Figure out what to do with recv/send errors
 
         // Write to Client
         let ctxc = ctx.clone();
         let cc = compressed.clone();
+        let sc = state.clone();
         let writer = tokio::spawn(async move {
             let mut crx = crx1;
             let ctx = ctxc;
             let compressed = cc;
+            let state = sc;
+
+            let send_packet =
+                async move |packet: Packets,
+                            writer: &tokio::net::tcp::OwnedWriteHalf,
+                            ctx: &broadcast::Sender<String>,
+                            compressed: &Arc<RwLock<bool>>| {
+                    trace!("Sending packet: {}", packet.get_id());
+                    let mut bytes = Vec::new();
+
+                    let id = packet.get_id();
+
+                    let mut should_enable_compression = false; // TODO: Something better
+                    match packet {
+                        Packets::ClientboundLoginDisconnect(packet) => {
+                            bytes.extend(serial::encode_to_vec(packet.as_ref()).unwrap());
+
+                            debug!(
+                                "Disconnecting client: {}",
+                                String::from(packet.reason.value)
+                            );
+                            ctx.send("".to_string()).unwrap();
+                        }
+                        Packets::ClientboundLoginSetCompression(_) => {
+                            should_enable_compression = true;
+                            bytes.extend(packet.get_data());
+                        }
+                        _ => {
+                            bytes.extend(packet.get_data());
+                        }
+                    }
+
+                    // Normal packet
+                    let len = (bytes.len() + 1) as u32;
+                    let mut data = Vec::with_capacity(len as usize + v32::byte_size(len));
+                    data.extend(serial::encode_to_vec(&v32::from(len)).unwrap());
+                    data.push(id);
+                    data.extend(bytes);
+
+                    if *compressed.read().await {
+                        let mut compressed_len = 0;
+                        if len > CONFIG.network.advanced.compression_threshold {
+                            let mut zlib = ZlibEncoder::new(
+                                Vec::new(),
+                                Compression::new(CONFIG.network.advanced.compression_level),
+                            );
+                            zlib.write_all(&data[v32::byte_size(len)..]).unwrap();
+                            let compressed_data = zlib.finish().unwrap();
+
+                            // If our compressed data is smaller, use it
+                            if compressed_data.len() < len as usize {
+                                compressed_len = compressed_data.len() as u32;
+                                data = compressed_data;
+                            }
+                        }
+
+                        // Compressed packet
+                        let skip = v32::byte_size(len);
+
+                        let len = data.len() + v32::byte_size(compressed_len);
+                        let mut bytes = Vec::with_capacity(v32::byte_size(len as u32) + len);
+                        bytes.extend(serial::encode_to_vec(&v32::from(len as u32)).unwrap());
+                        bytes.extend(serial::encode_to_vec(&v32::from(compressed_len)).unwrap());
+                        bytes.extend(data[skip..].iter());
+
+                        data = bytes;
+                    }
+
+                    // TODO: Encryption
+
+                    if data.len() > 2097151 {
+                        error!("Packet too large! {}", data.len());
+                        ctx.send(format!("Server tried sending Packet size {}", data.len()))
+                            .unwrap();
+                        return;
+                    }
+
+                    trace!("Sending {} bytes to client", data.len());
+
+                    // Write to file(debug)
+                    if false {
+                        let mut file = std::fs::OpenOptions::new()
+                            .write(true)
+                            .create(true)
+                            .open("packets.bin")
+                            .unwrap();
+                        file.write_all(&data).unwrap();
+                    }
+
+                    // TODO: Look into performance advantages of batching
+                    let mut written = 0;
+                    while written < data.len() {
+                        writer.writable().await.unwrap();
+                        match writer.try_write(&data[written..]) {
+                            Ok(n) => {
+                                trace!("Wrote {} bytes", n);
+                                written += n;
+                            }
+                            Err(e) => {
+                                if e.kind() != std::io::ErrorKind::WouldBlock {
+                                    error!("Error reading from connection: {}", e);
+                                }
+                                break;
+                            }
+                        }
+                    }
+
+                    /*
+                        As SetCompression is never recieved and packets are only compressed AFTER,
+                        we *shouldn't* have to worry about syncing this with the reader.
+                    */
+                    if should_enable_compression {
+                        *compressed.write().await = true;
+                    }
+                };
+
             loop {
                 tokio::select! {
-                    _ = crx.recv() => {
+                    Ok(reason) = crx.recv() => {
+                        if *(state.read().await) == ConnectionState::Play {
+                            send_packet(Packets::from(packets::clientbound::play_packets::Disconnect {
+                                reason: Chat::from(reason),
+                            }), &writer, &ctx, &compressed).await;
+                        }
                         break;
                     }
                     packet = outbound.recv() => {
                         if let Some(packet) = packet {
-                            trace!("Sending packet: {}", packet.get_id());
-                            let mut bytes = Vec::new();
-
-                            let id = packet.get_id();
-
-                            let mut should_enable_compression = false; // TODO: Something better
-                            match packet {
-                                Packets::ClientboundLoginDisconnect(packet) => {
-                                    bytes.extend(serial::encode_to_vec(packet.as_ref()).unwrap());
-
-                                    debug!("Disconnecting client: {}", String::from(packet.reason.value));
-                                    ctx.send((true, "".to_string())).unwrap();
-                                }
-                                Packets::ClientboundLoginSetCompression(_) => {
-                                    should_enable_compression = true;
-                                    bytes.extend(packet.get_data());
-                                }
-                                _ => {
-                                    bytes.extend(packet.get_data());
-                                }
-                            }
-
-                            // Normal packet
-                            let len = (bytes.len() + 1) as u32;
-                            let mut data = Vec::with_capacity(bytes.len() + 1 + v32::byte_size(len));
-                            data.extend(serial::encode_to_vec(&v32::from(len)).unwrap());
-                            data.push(id);
-                            data.extend(bytes);
-
-                            if *compressed.read().await {
-                                let mut compressed_len = 0;
-                                if len > CONFIG.network.advanced.compression_threshold {
-                                    let mut zlib = ZlibEncoder::new(Vec::new(), Compression::new(CONFIG.network.advanced.compression_level));
-                                    zlib.write_all(&data[v32::byte_size(len)..]).unwrap();
-                                    let compressed_data = zlib.finish().unwrap();
-
-                                    // If our compressed data is smaller, use it
-                                    if compressed_data.len() < len as usize {
-                                        compressed_len = compressed_data.len() as u32;
-                                        data = compressed_data;
-                                    }
-                                }
-
-                                // Compressed packet
-                                let len = data.len() + v32::byte_size(compressed_len);
-                                let mut bytes = Vec::with_capacity(v32::byte_size(len as u32) + len);
-                                bytes.extend(serial::encode_to_vec(&v32::from(len as u32)).unwrap());
-                                bytes.extend(serial::encode_to_vec(&v32::from(compressed_len)).unwrap());
-                                bytes.extend(data);
-
-                                data = bytes;
-                            }
-
-                            if data.len() > 2097151 {
-                                error!("Packet too large! {}", data.len());
-                                ctx.send((true, format!("Server tried sending Packet size {}", data.len()))).unwrap();
-                                continue;
-                            }
-
-                            trace!("Sending {} bytes to client", data.len());
-
-                            let mut written = 0;
-                            while written < data.len() {
-                                writer.writable().await.unwrap();
-                                match writer.try_write(&data[written..]) {
-                                    Ok(n) => {
-                                        trace!("Wrote {} bytes", n);
-                                        written += n;
-                                    }
-                                    Err(e) => {
-                                        if e.kind() != std::io::ErrorKind::WouldBlock {
-                                            error!("Error reading from connection: {}", e);
-                                        }
-                                        break;
-                                    }
-                                }
-                            }
-
-                            /*
-                                As SetCompression is never recieved and packets are only compressed AFTER,
-                                we *shouldn't* have to worry about syncing this with the reader.
-                            */
-                            if should_enable_compression {
-                                *compressed.write().await = true;
-                            }
+                            send_packet(packet, &writer, &ctx, &compressed).await;
                         }
                     }
                 }
@@ -166,8 +206,9 @@ impl Connection {
         // Read from Client
         let ctxc = ctx.clone();
         let outgoing_clone = outgoing.clone();
+        let state_clone = state.clone();
         let reader = tokio::spawn(async move {
-            let mut state = ConnectionState::Handshake;
+            let mut state = state_clone;
 
             let mut crx = crx2;
             let ctx = ctxc;
@@ -190,7 +231,7 @@ impl Connection {
                 let read = match reader.try_read(&mut buffer) {
                     Ok(0) => {
                         //trace!("Connection closed");
-                        ctx.send((true, "".to_string())).unwrap();
+                        ctx.send("".to_string()).unwrap();
                         0
                     }
                     Ok(n) => {
@@ -236,7 +277,7 @@ impl Connection {
                             Ok(0) => {
                                 //trace!("Connection closed");
                                 warn!("Connection close while reading packet");
-                                ctx.send((true, "".to_string())).unwrap();
+                                ctx.send("".to_string()).unwrap();
                                 break 'outer;
                             }
                             Ok(n) => {
@@ -278,7 +319,7 @@ impl Connection {
 
                     //index += packet_bytes.len();
 
-                    let packet = match state {
+                    let packet = match *state.read().await {
                         ConnectionState::Handshake => packets::serverbound::decode_handshaking(
                             u32::from(id) as u8,
                             data.to_vec(),
@@ -309,7 +350,9 @@ impl Connection {
 
                     let packet = packet.unwrap();
 
-                    if process_packet(&packet, &mut state, &outgoing_clone, &ctx).await {
+                    if let Some(packet) =
+                        process_packet(packet, &mut state, &outgoing_clone, &ctx).await
+                    {
                         inbound.send(packet).await.unwrap();
                     }
                 }
@@ -337,7 +380,7 @@ impl Connection {
         }
 
         self.connected
-            .send((true, "Connection Closed by Server".to_string()))
+            .send("Connection Closed by Server".to_string())
             .unwrap();
 
         self.writer.await.unwrap();
@@ -347,11 +390,11 @@ impl Connection {
 
 // Returns true if the packet should be sent to the server
 async fn process_packet(
-    packet: &Packets,
-    state: &mut ConnectionState,
+    packet: Packets,
+    state: &mut Arc<RwLock<ConnectionState>>,
     outgoing: &Sender<Packets>,
-    close_sender: &broadcast::Sender<(bool, String)>,
-) -> bool {
+    close_sender: &broadcast::Sender<String>,
+) -> Option<Packets> {
     match packet {
         Packets::ServerboundHandshakingHandshake(packet) => {
             let ver = u32::from(packet.protocol_version);
@@ -361,10 +404,10 @@ async fn process_packet(
                     "Client attempted connection with Unsupported Protocol Version {}",
                     u32::from(packet.protocol_version)
                 );
-                close_sender.send((true, "".to_string())).unwrap();
+                close_sender.send("".to_string()).unwrap();
             }
 
-            *state = packet.next_state.into();
+            *state.write().await = packet.next_state.into();
         }
         Packets::ServerboundStatusRequest(_) => {
             #[derive(serde::Serialize)]
@@ -449,10 +492,20 @@ async fn process_packet(
                 ))
                 .await
                 .unwrap();
+            outgoing
+                .send(Packets::from(
+                    packets::clientbound::login_packets::LoginSuccess {
+                        uuid: BoundedString::<36>::from("00000000-0000-0000-0000-000000000000"),
+                        username: packet.name,
+                    },
+                ))
+                .await
+                .unwrap();
+            return Some(Packets::from(
+                packets::internal::server_packets::Initalize {},
+            ));
         }
-        _ => {
-            return true;
-        }
+        packet => return Some(packet),
     }
-    false
+    None
 }
