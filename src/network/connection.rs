@@ -37,6 +37,7 @@ pub(crate) struct Connection {
 impl Connection {
     pub(crate) async fn new(
         socket: TcpStream,
+        players: usize,
     ) -> (Self, ServerConnection, broadcast::Receiver<String>) {
         let (inbound, incoming) = tokio::sync::mpsc::channel(32);
         let (outgoing, mut outbound) = tokio::sync::mpsc::channel::<Packets>(32);
@@ -79,6 +80,9 @@ impl Connection {
 
                     let mut should_enable_compression = false; // TODO: Something better
                     match packet {
+                        Packets::InternalNetworkDisconnect(_) => {
+                            ctx.send("".to_string()).unwrap();
+                        }
                         Packets::ClientboundLoginDisconnect(packet) => {
                             bytes.extend(serial::encode_to_vec(packet.as_ref()).unwrap());
 
@@ -351,7 +355,7 @@ impl Connection {
                     let packet = packet.unwrap();
 
                     if let Some(packet) =
-                        process_packet(packet, &mut state, &outgoing_clone, &ctx).await
+                        process_packet(packet, &mut state, &outgoing_clone, &ctx, players).await
                     {
                         inbound.send(packet).await.unwrap();
                     }
@@ -394,6 +398,7 @@ async fn process_packet(
     state: &mut Arc<RwLock<ConnectionState>>,
     outgoing: &Sender<Packets>,
     close_sender: &broadcast::Sender<String>,
+    players: usize,
 ) -> Option<Packets> {
     match packet {
         Packets::ServerboundHandshakingHandshake(packet) => {
@@ -451,7 +456,7 @@ async fn process_packet(
                 },
                 players: Players {
                     max: CONFIG.network.max_players,
-                    online: 0,          // TODO: Get online players from Server
+                    online: players,
                     sample: Vec::new(), // TODO
                 },
                 description: Chat {
@@ -484,6 +489,8 @@ async fn process_packet(
                 "Client with username '{}' attempting connection",
                 packet.name
             );
+            let name = packet.name.to_string();
+
             outgoing
                 .send(Packets::from(
                     packets::clientbound::login_packets::SetCompression {
@@ -496,13 +503,16 @@ async fn process_packet(
                 .send(Packets::from(
                     packets::clientbound::login_packets::LoginSuccess {
                         uuid: BoundedString::<36>::from("00000000-0000-0000-0000-000000000000"),
-                        username: packet.name,
+                        username: BoundedString::<16>::from(name.clone()),
                     },
                 ))
                 .await
                 .unwrap();
             return Some(Packets::from(
-                packets::internal::server_packets::Initalize {},
+                packets::internal::server_packets::Initalize {
+                    uuid: "00000000-0000-0000-0000-000000000000".to_string(),
+                    username: name,
+                },
             ));
         }
         packet => return Some(packet),

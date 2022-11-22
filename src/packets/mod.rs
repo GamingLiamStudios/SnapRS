@@ -5,15 +5,21 @@ macro_rules! packet {
     {@ $decoder:ident $param:ident $type:ty, none} => {
         let $param = <$type as serial::Decode>::decode($decoder)?;
     };
-    {@ $decoder:ident $param:ident $type:ty, remain} => {
-        todo!("Implement remain dec");
-    };
-    {@ $decoder:ident $param:ident $type:ty, $length:ident} => {
-        let mut $param = Vec::with_capacity(u32::from($length) as usize);
-        for _ in 0..u32::from($length) {
-            $param.push(<u8 as serial::Decode>::decode($decoder)?);
+    {@ $decoder:ident $param:ident Vec<$type:ty>, remain} => {
+        let mut $param = Vec::new();
+        while $decoder.remaining() > 0 {
+            $param.push(<$type as serial::Decode>::decode($decoder)?);
         }
     };
+    {@ $decoder:ident $param:ident Vec<$type:ty>, $length:ident} => {
+        // Can express $length as a u32 as the protocol only ever uses v32 for Vec lengths
+        let mut $param = Vec::with_capacity(u32::from($length) as usize);
+        for _ in 0..u32::from($length) {
+            $param.push(<$type as serial::Decode>::decode($decoder)?);
+        }
+    };
+
+    // Encoder
     {@ $encoder:ident $self:ident $param:ident none} => {
         serial::Encode::encode(&$self.$param, $encoder)?;
     };
@@ -23,17 +29,21 @@ macro_rules! packet {
         }
     };
     {@ $encoder:ident $self:ident $param:ident $length:ident} => {
+        // TODO: do this automagically
+        assert_eq!($self.$param.len(), u32::from($self.$length) as usize);
         for b in &$self.$param {
             serial::Encode::encode(b, $encoder)?;
         }
     };
-    {@ $name:ident { } -> ($(pub $param:ident : $type:ty => $length:ident),* $(,)?)} => {
+
+    // Expand to Struct
+    {@ $name:ident { } -> ($(pub $param:ident : $type:tt $(<$inner:tt>)? => $length:ident),* $(,)?)} => {
         pub struct $name {
-            $(pub $param : $type),*
+            $(pub $param : $type $(<$inner>)?),*
         }
         impl serial::Decode for $name {
             fn decode(_decoder: &mut serial::Decoder) -> Result<Self, serial::DecodeError> {
-                $(packet!{@ _decoder $param $type, $length})*
+                $(packet!{@ _decoder $param $type $(<$inner>)?, $length})*
 
                 Ok(Self {
                     $($param),*
@@ -48,9 +58,16 @@ macro_rules! packet {
             }
         }
     };
-    {@ $name:ident { $param:ident : Vec<$type:ty, remain>, $($rest:tt)* } -> ($($result:tt)*)} => {
+    {@ $name:ident : Ignore { } -> ($(pub $param:ident : $type:tt $(<$inner:tt>)? => $length:ident),* $(,)?)} => {
+        pub struct $name {
+            $(pub $param : $type $(<$inner>)?),*
+        }
+    };
+
+    // Parse Struct
+    {@ $name:ident $(: $extra:ident)? { $param:ident : Vec<$type:tt, remain>, $($rest:tt)* } -> ($($result:tt)*)} => {
         packet! {
-            @ $name {
+            @ $name $(: $extra)? {
                 $($rest)*
             } -> (
                 $($result)*
@@ -58,9 +75,9 @@ macro_rules! packet {
             )
         }
     };
-    {@ $name:ident { $param:ident : Vec<$type:ty, $length:ident>, $($rest:tt)* } -> ($($result:tt)*)} => {
+    {@ $name:ident $(: $extra:ident)? { $param:ident : Vec<$type:tt, $length:ident>, $($rest:tt)* } -> ($($result:tt)*)} => {
         packet! {
-            @ $name {
+            @ $name $(: $extra)? {
                 $($rest)*
             } -> (
                 $($result)*
@@ -68,25 +85,36 @@ macro_rules! packet {
             )
         }
     };
-    {@ $name:ident { $param:ident : $type:ty, $($rest:tt)* } -> ($($result:tt)*)} => {
+    {@ $name:ident $(: $extra:ident)? { $param:ident : $type:tt $(<$inner:tt>)?, $($rest:tt)* } -> ($($result:tt)*)} => {
         packet! {
-            @ $name {
+            @ $name $(: $extra)? {
                 $($rest)*
             } -> (
                 $($result)*
-                pub $param : $type => none,
+                pub $param : $type $(<$inner>)? => none,
             )
         }
     };
-    ($name:ident { $( $param:ident : $type:tt $(<$inner:tt $(, $length:ident)?>)?, )* $(,)* }) => {
+
+    // Entrypoint
+    ($name:ident $(: $extra:ident)? { $( $param:ident : $type:tt $(<$inner:tt $(, $length:ident)?>)?, )* $(,)* }) => {
         packet! {
-            @ $name { $($param : $type $(<$inner $(, $length)?>)?,)* } -> ()
+            @ $name $(: $extra)? { $($param : $type $(<$inner $(, $length)?>)?,)* } -> ()
         }
     };
 }
 
+macro_rules! ignore {
+    ($extra:block, $extra2:block, Ignore) => {
+        $extra2
+    };
+    ($extra:block, $extra2:block) => {
+        $extra
+    };
+}
+
 macro_rules! packets {
-    { $($dir:ident => { $($state:ident => { $($id:expr => $name:ident { $($inner:tt)* } $(,)?)* }),* }),* } => {
+    { $($dir:ident => { $($state:ident => { $($id:expr => $name:ident $(: $extra:ident)? { $($inner:tt)* } $(,)?)* }),* }),* } => {
         paste::paste! {
             #[allow(dead_code)]
             pub enum Packets {
@@ -108,9 +136,10 @@ macro_rules! packets {
                     }
                 }
 
+                #[allow(unused_variables)]
                 pub fn get_data(&self) -> Vec<u8> {
                     match self {
-                        $($($(Self::[<$dir:camel $state:camel $name:camel>](packet) => serial::encode_to_vec(packet.as_ref()).unwrap(),)*)*)*
+                        $($($(Self::[<$dir:camel $state:camel $name:camel>](packet) => ignore!({ serial::encode_to_vec(packet.as_ref()).unwrap() }, { Vec::new() } $(, $extra)?),)*)*)*
                     }
                 }
             }
@@ -136,17 +165,27 @@ macro_rules! packets {
 
                         use super::super::Packets;
 
+                        #[allow(unused_imports)]
                         use super::super::serial;
 
                         // This is being used elsewhere. Clientbound decodes aren't being used however, so Clippy complains about those.
-                        #[allow(dead_code)]
+                        #[allow(dead_code, unused_variables)]
                         pub fn decode_packet(id: u8, data: Vec<u8>) -> Option<Packets> {
                             match id {
                                 $(
                                     $id => {
-                                        let (packet, _) = serial::decode_from_slice::<$name>(data.as_slice()).unwrap();
-                                        Some(Packets::[<$dir:camel $state:camel $name:camel>](Box::new(packet)))
-                                    },
+                                        return ignore!(
+                                            {
+                                                let (packet, _) = serial::decode_from_slice::<$name>(&data).unwrap();
+                                                Some(Packets::[<$dir:camel $state:camel $name:camel>](Box::new(packet)))
+                                            },
+                                            {
+                                                error!("Failed to decode packet with id {}", id);
+                                                None
+                                            }
+                                            $(, $extra)?
+                                        );
+                                    }
                                 )*
                                 _ => {
                                     error!("Unknown packet id: {}", id);
@@ -155,7 +194,7 @@ macro_rules! packets {
                             }
                         }
                         $(
-                            packet!( $name { $($inner)* } );
+                            packet!( $name $(: $extra)? { $($inner)* } );
                         )*
                     }
 
@@ -275,7 +314,10 @@ packets! {
     },
     Internal => {
         Server => {
-            0x00 => Initalize {},
+            0x00 => Initalize : Ignore {
+                uuid: String,
+                username: String,
+            },
         },
         Network => {
             0x00 => Disconnect {

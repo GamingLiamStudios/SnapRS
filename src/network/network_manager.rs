@@ -7,7 +7,7 @@ use crate::config::CONFIG;
 
 use super::connection::*;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
@@ -18,7 +18,7 @@ pub struct NetworkManager {
 
     // TODO: Invesigate Lock-free alternatives
     // Locks when a new connection is added/removed
-    pub connections: Arc<Mutex<DenseSlotMap<DefaultKey, ServerConnection>>>,
+    pub connections: Arc<RwLock<DenseSlotMap<DefaultKey, Mutex<ServerConnection>>>>,
 }
 
 impl NetworkManager {
@@ -27,7 +27,7 @@ impl NetworkManager {
             connected: None,
             listener_thread: None,
 
-            connections: Arc::new(Mutex::new(DenseSlotMap::with_key())),
+            connections: Arc::new(RwLock::new(DenseSlotMap::with_key())),
         }
     }
 
@@ -70,7 +70,7 @@ impl NetworkManager {
                                 // Configure TCP Stream
                                 socket.set_nodelay(true).unwrap();
 
-                                let (connection, mut srv_con, mut disconnect_future) = Connection::new(socket).await;
+                                let (connection, mut srv_con, mut disconnect_future) = Connection::new(socket, server_connections.read().await.len()).await;
 
                                 let key = connections.insert(connection);
 
@@ -96,6 +96,13 @@ impl NetworkManager {
                         }
                     }
                     Some(Ok((key, reason))) = df.next() => {
+                        /*
+                            OK so we've got a disconnect request from the connection.
+                            We'd naturally remove the connection from the array, but what about server_connections?
+                            When a connection is handed over to the server, the server will then handle *all* packets from that connection.
+                            Including Disconnects.
+                            So the server will itself remove the connection from the server_connections array.
+                        */
                         connections.remove(key);
                         if reason.is_empty() {
                             trace!("Connection Closed. Total: {}", connections.len());
@@ -105,8 +112,8 @@ impl NetworkManager {
                     }
                     Some(Ok(connection)) = cf.next() => {
                         if let Some(connection) = connection {
-                            let mut server_connections = server_connections.lock().await;
-                            server_connections.insert(connection);
+                            let mut server_connections = server_connections.write().await;
+                            server_connections.insert(Mutex::new(connection));
                             trace!("Connection Registered. Total: {}", server_connections.len());
                         }
                     }
