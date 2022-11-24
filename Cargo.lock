@@ -636,8 +636,18 @@ dependencies = [
  "serde-toml-merge",
  "serde_json",
  "slotmap",
+ "snap_rs_proc_macros",
  "tokio",
  "toml",
+]
+
+[[package]]
+name = "snap_rs_proc_macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

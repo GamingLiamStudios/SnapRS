@@ -1,6 +1,13 @@
+extern crate snap_rs_proc_macros;
+
 pub mod serial;
 pub mod types;
 
+pub(self) use snap_rs_proc_macros::packets;
+
+use types::*;
+
+/*
 macro_rules! packet {
     {@ $decoder:ident $param:ident $type:ty, none} => {
         let $param = <$type as serial::Decode>::decode($decoder)?;
@@ -249,7 +256,16 @@ impl From<&PacketState> for u8 {
         }
     }
 }
+*/
 
+/*
+    Most of the Packet format can be inferred from the packets below, but here's some of the weirder parts:
+    - The length fields in a Vec(Vec<type, length>) will refer to a previous field in the struct. This field will then
+      be removed from the struct and will only exist during decoding/encoding.
+    - Most of the parameters in a Struct is going to be automatically inferred to a public visability.
+      The only situation you would manually specify a `pub` visability is if you want to ensure a length field is kept.
+    - Trailing commas can be used anywhere except for the Direction field - The outermost field in the macro.
+*/
 packets! {
     Serverbound => {
         Handshaking => {
@@ -271,9 +287,9 @@ packets! {
                 name: BoundedString<16>,
             },
             0x01 => EncryptionResponse {
-                shared_secret_length: v32,
+                pub shared_secret_length: v32,
                 shared_secret: Vec<u8, shared_secret_length>,
-                verify_token_length: v32,
+                pub verify_token_length: v32,
                 verify_token: Vec<u8, verify_token_length>,
             },
         }
