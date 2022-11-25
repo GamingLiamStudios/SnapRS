@@ -213,6 +213,8 @@ macro_rules! packets {
 
 // TODO: Get these in the macro somehow
 
+*/
+
 // Won't actually ever be serialized. Just used for the macro to be happy
 #[derive(PartialEq, Eq)]
 pub enum PacketState {
@@ -220,18 +222,6 @@ pub enum PacketState {
     Status,
     Login,
     Play,
-}
-
-impl serial::Decode for PacketState {
-    fn decode(decoder: &mut serial::Decoder) -> Result<Self, serial::DecodeError> {
-        Ok(<u8 as serial::Decode>::decode(decoder)?.into())
-    }
-}
-
-impl serial::Encode for PacketState {
-    fn encode(&self, encoder: &mut serial::Encoder) -> Result<(), serial::EncodeError> {
-        <u8 as serial::Encode>::encode(&u8::from(self), encoder)
-    }
 }
 
 impl From<u8> for PacketState {
@@ -256,7 +246,6 @@ impl From<&PacketState> for u8 {
         }
     }
 }
-*/
 
 /*
     Most of the Packet format can be inferred from the packets below, but here's some of the weirder parts:
@@ -264,7 +253,6 @@ impl From<&PacketState> for u8 {
       be removed from the struct and will only exist during decoding/encoding.
     - Most of the parameters in a Struct is going to be automatically inferred to a public visability.
       The only situation you would manually specify a `pub` visability is if you want to ensure a length field is kept.
-    - Trailing commas can be used anywhere except for the Direction field - The outermost field in the macro.
 */
 packets! {
     Serverbound => {
@@ -287,9 +275,9 @@ packets! {
                 name: BoundedString<16>,
             },
             0x01 => EncryptionResponse {
-                pub shared_secret_length: v32,
+                shared_secret_length: v32,
                 shared_secret: Vec<u8, shared_secret_length>,
-                pub verify_token_length: v32,
+                verify_token_length: v32,
                 verify_token: Vec<u8, verify_token_length>,
             },
         }
@@ -340,7 +328,7 @@ packets! {
                 reason: BoundedString<32767>,
             },
         }
-    }
+    },
 }
 
 impl serial::Decode for Packets {
