@@ -102,7 +102,7 @@ impl Parse for Packet {
 
 // TODO: Fixed-length arrays
 struct Field {
-    vis: Option<Token![pub]>,
+    vis: bool,
     ident: Ident,
     ty: Type,
     length: Option<Ident>,
@@ -111,9 +111,10 @@ struct Field {
 impl Parse for Field {
     fn parse(input: ParseStream) -> Result<Self> {
         let vis = if input.peek(Token![pub]) {
-            Some(input.parse()?)
+            input.parse::<Token![pub]>()?;
+            true
         } else {
-            None
+            false
         };
         let ident = input.parse()?;
 
@@ -158,7 +159,7 @@ impl Parse for Field {
         Ok(Field {
             vis,
             ident,
-            ty: syn::parse2::<Type>(ty)?,
+            ty: syn::parse2(ty)?,
             length,
         })
     }
@@ -189,7 +190,8 @@ pub fn packets(items: TokenStream) -> TokenStream {
                 for field in &packet.fields {
                     if let Some(length) = &field.length {
                         // FIXME: what
-                        if field.vis.is_none() {
+                        println!("length: {:?} {}", length, field.vis);
+                        if !field.vis {
                             exclude.push(length);
                         }
                     }
