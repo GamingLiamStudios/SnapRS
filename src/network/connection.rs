@@ -54,7 +54,7 @@ impl Connection {
 
         // Connection States
         let compressed = Arc::new(RwLock::new(false));
-        let state = Arc::new(RwLock::new(ConnectionState::Handshake));
+        let mut state = Arc::new(RwLock::new(ConnectionState::Handshake));
 
         // TODO: Figure out what to do with recv/send errors
 
@@ -210,10 +210,7 @@ impl Connection {
         // Read from Client
         let ctxc = ctx.clone();
         let outgoing_clone = outgoing.clone();
-        let state_clone = state.clone();
         let reader = tokio::spawn(async move {
-            let mut state = state_clone;
-
             let mut crx = crx2;
             let ctx = ctxc;
 

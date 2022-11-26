@@ -1,7 +1,6 @@
-
 use either::Either;
 use proc_macro::TokenStream;
-use proc_macro2::{Span, TokenTree, Literal};
+use proc_macro2::{Literal, Span, TokenTree};
 use quote::quote;
 use syn::{
     braced,
@@ -162,8 +161,7 @@ impl Parse for Field {
                             }
 
                             acc.last_mut().unwrap().push(TokenTree::Punct(punct));
-                        }
-                        else {
+                        } else {
                             acc.last_mut().unwrap().push(token);
                         }
 
@@ -172,7 +170,7 @@ impl Parse for Field {
                     .into_iter()
                     .map(|tokens| tokens.into_iter().collect())
                     .collect::<Vec<proc_macro2::TokenStream>>();
-                
+
                 // Now, let's check if we got 1 or 2 TokenStreams
                 match innerty.len() {
                     1 => {
@@ -196,19 +194,17 @@ impl Parse for Field {
                     }
                     _ => panic!("Invalid Vec format"),
                 }
+            } else if innerty.is_empty() {
+                quote! { #ty_ident }
             } else {
-                if innerty.is_empty() {
-                    quote! { #ty_ident }
-                } else {
-                    quote! { #ty_ident<#(#innerty)*> }
-                }
+                quote! { #ty_ident<#(#innerty)*> }
             }
         };
 
         Ok(Field {
             vis,
             ident,
-            ty: ty.into(),
+            ty,
             length,
         })
     }
@@ -229,9 +225,7 @@ impl Parse for VecParse {
         let ty = input.parse::<Type>()?;
         input.parse::<Token![>]>()?;
 
-        Ok(VecParse {
-            ty,
-        })
+        Ok(VecParse { ty })
     }
 }
 
@@ -278,20 +272,17 @@ pub fn packets(items: TokenStream) -> TokenStream {
 
                 let mut exclude = Vec::new();
                 for field in &packet.fields {
-                    if let Some(length) = &field.length {
-                        if let either::Left(ident) = &length {
-                            // Find field with the same name as the length
-                            let length_field = packet
-                                .fields
-                                .iter()
-                                .find(|f| &f.ident == ident)
-                                .expect("length field not found");
+                    if let Some(either::Left(ident)) = &field.length {
+                        // Find field with the same name as the length
+                        let length_field = packet
+                            .fields
+                            .iter()
+                            .find(|f| &f.ident == ident)
+                            .expect("length field not found");
 
-                            if !length_field.vis {
-                                exclude.push(ident);
-                            }
+                        if !length_field.vis {
+                            exclude.push(ident);
                         }
-                        
                     }
                 }
 
@@ -331,7 +322,10 @@ pub fn packets(items: TokenStream) -> TokenStream {
                     traits: packet.traits.clone(),
                 });
 
-                if packet.traits.contains(&Ident::new("Ignore", Span::call_site())) {
+                if packet
+                    .traits
+                    .contains(&Ident::new("Ignore", Span::call_site()))
+                {
                     continue;
                 }
 
@@ -366,9 +360,7 @@ pub fn packets(items: TokenStream) -> TokenStream {
                                             #ident.push(<#ty as serial::Decode>::decode(decoder)?);
                                         }
                                     });
-                                }
-                                else
-                                {
+                                } else {
                                     let length = ident_strcat(length_ident, "_usize");
                                     decode.push(quote! {
                                         let #length = u32::from(#length_ident) as usize;
@@ -378,7 +370,6 @@ pub fn packets(items: TokenStream) -> TokenStream {
                                         }
                                     });
                                 }
-                                
                             }
                             either::Right(literal) => {
                                 decode.push(quote! {
@@ -411,7 +402,6 @@ pub fn packets(items: TokenStream) -> TokenStream {
                     impl serial::Decode for #packet_ident {
                         fn decode(decoder: &mut serial::Decoder) -> Result<Self, serial::DecodeError> {
                             #(#decode)*
-            
                             Ok(Self {
                                 #(#decode_param)*
                             })
@@ -420,13 +410,15 @@ pub fn packets(items: TokenStream) -> TokenStream {
                     impl serial::Encode for #packet_ident {
                         fn encode(&self, encoder: &mut serial::Encoder) -> Result<(), serial::EncodeError> {
                             #(#encode)*
-            
                             Ok(())
                         }
                     }
                 });
 
-                if packet.traits.contains(&Ident::new("Ignore", Span::call_site())) {
+                if packet
+                    .traits
+                    .contains(&Ident::new("Ignore", Span::call_site()))
+                {
                     let id = packet.id.clone();
                     decode_packets.push(quote! {
                         #id => {
@@ -434,8 +426,7 @@ pub fn packets(items: TokenStream) -> TokenStream {
                             None
                         }
                     });
-                }
-                else {
+                } else {
                     let id = packet.id.clone();
                     let full_ident = ident_cat(
                         &ident_camel(&direction.ident),
@@ -478,8 +469,17 @@ pub fn packets(items: TokenStream) -> TokenStream {
             .iter()
             .map(|s| ident_strcat(&ident_lower(&s.ident), "_packets"))
             .collect::<Vec<_>>();
-        let state_decode = direction.states.iter().map(|s| ident_cat(&Ident::new("decode_", Span::call_site()), &ident_lower(&s.ident))).collect::<Vec<_>>();
- 
+        let state_decode = direction
+            .states
+            .iter()
+            .map(|s| {
+                ident_cat(
+                    &Ident::new("decode_", Span::call_site()),
+                    &ident_lower(&s.ident),
+                )
+            })
+            .collect::<Vec<_>>();
+
         dirs.push(quote! {
             pub mod #dir_ident {
                 use super::*;

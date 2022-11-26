@@ -6,10 +6,10 @@ impl From<String> for Identifier {
     fn from(value: String) -> Self {
         // Add default namespace if none is specified
         let mut parts = value.split(':');
-        let mut namespace = parts.next().unwrap();
-        let path = parts.next().unwrap_or_else(|| {
+        let mut namespace = parts.next().unwrap().to_string();
+        let path = parts.next().map(|e| e.to_string()).unwrap_or_else(|| {
             let path = namespace.clone();
-            namespace = "minecraft";
+            namespace = "minecraft".to_string();
             path
         });
 
