@@ -1,133 +1,96 @@
-#![feature(async_closure)]
+#![feature(iter_chain)]
 
-mod config;
-mod network;
-mod packets;
-mod server;
+use std::{
+    error::Error,
+    iter::chain,
+};
 
-use std::sync::{atomic::AtomicBool, Arc};
+use nom::{
+    IResult,
+    Parser,
+    bits::{
+        bits,
+        complete::{
+            tag,
+            take,
+        },
+    },
+    combinator::map,
+    multi::many_m_n,
+    sequence::{
+        pair,
+        preceded,
+    },
+};
+use smol::stream::StreamExt;
+use tracing::{
+    debug,
+    info,
+};
+use tracing_subscriber::{
+    Layer,
+    filter::Targets,
+    fmt,
+    layer::SubscriberExt,
+    util::SubscriberInitExt,
+};
 
-use config::CONFIG;
+#[derive(thiserror::Error, Debug)]
+enum VarintError {
+    #[error("Varint is larger than expected.")]
+    Oversized,
+}
 
-use log::{debug, info};
+fn parse_varint_bits<const P: u8>(data: &[u8]) -> IResult<&[u8], u8> {
+    bits::<_, _, nom::error::Error<(&[u8], usize)>, _, _>(preceded(tag(P, 1usize), take(7usize)))(
+        data,
+    )
+}
 
-fn setup_logger(log_level: log::LevelFilter) -> Result<(), fern::InitError> {
-    if log_level == log::LevelFilter::Error || log_level == log::LevelFilter::Off {
-        println!("\x1B[{}mWARNING: Important messages will be hidden. Please consider setting log_level to \"info\" or \"warn\" in the config file.\x1B[0m", 
-            fern::colors::Color::Yellow.to_fg_str(),
+#[allow(clippy::cast_possible_wrap)]
+fn parse_varint(data: &[u8]) -> IResult<&[u8], i32> {
+    map(
+        pair(
+            many_m_n(1, 4, parse_varint_bits::<1>),
+            parse_varint_bits::<0>,
+        ),
+        |(values, delim)| {
+            chain(values.iter(), std::iter::once(&delim))
+                .enumerate()
+                .fold(0u32, |acc, (i, v)| acc | (u32::from(*v) << (i * 7))) as i32
+        },
+    )
+    .parse(data)
+}
 
-        );
+async fn run_server() -> Result<(), Box<dyn Error>> {
+    let socket = smol::net::TcpListener::bind("127.0.0.1:25565").await?;
+    let mut incoming = socket.incoming();
+
+    while let Some(client) = incoming.next().await {
+        let client = client?;
+        client.set_nodelay(true)?;
+        debug!(addr = ?client.peer_addr(), "New client connection");
     }
 
-    if log_level == log::LevelFilter::Off {
-        return Ok(());
-    }
-
-    // Colors for the different log levels
-    let colors = fern::colors::ColoredLevelConfig::new()
-        .error(fern::colors::Color::Red)
-        .warn(fern::colors::Color::Yellow)
-        .info(fern::colors::Color::White)
-        .debug(fern::colors::Color::Blue)
-        .trace(fern::colors::Color::Magenta);
-
-    // Shared logger configuration
-    let fmt_str = |message: &std::fmt::Arguments, record: &log::Record| -> String {
-        // FIXME: Lifetimes throw a fit if `format_args!`
-        format!(
-            "[{}][{}] {}",
-            chrono::Local::now().format("%Y-%m-%d %H:%M:%S"), //record.target(),
-            record.level(),
-            message
-        )
-    };
-
-    // Log to file (without colors)
-    let default = fern::Dispatch::new()
-        // Log to file (without colors)
-        .format(move |out, message, record| {
-            out.finish(format_args!("{}", fmt_str(message, record)))
-        })
-        .chain(fern::log_file(format!(
-            "logs/{}.log",
-            chrono::Local::now().format("%Y-%m-%d %H_%M_%S")
-        ))?);
-
-    // Log to stdout (with colors)
-    let color = fern::Dispatch::new()
-        .format(move |out, message, record| {
-            out.finish(format_args!(
-                "{}{}\x1B[0m",
-                format_args!("\x1B[{}m", colors.get_color(&record.level()).to_fg_str()),
-                fmt_str(message, record)
-            ))
-        })
-        .chain(std::io::stdout());
-
-    // Dispatch to both loggers
-    fern::Dispatch::new()
-        .chain(default)
-        .chain(color)
-        .level(log_level)
-        .apply()?;
     Ok(())
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create 'logs' directory if it doesn't exist
-    std::fs::create_dir_all("logs").unwrap();
+fn main() -> Result<(), Box<dyn Error>> {
+    let stdout_log = fmt::layer();
 
-    // logging *should* be fine with async/threading stuff
-    setup_logger(CONFIG.general.log_level.into()).unwrap(); // Really hate how I have to use .into()
+    tracing_subscriber::registry()
+        .with(
+            stdout_log.with_filter(
+                Targets::default()
+                    .with_target("snap_rs", tracing::Level::DEBUG)
+                    .with_default(tracing::Level::INFO),
+            ),
+        )
+        .init();
 
-    let tr = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-
-    tr.block_on(async {
-        let running = Arc::new(AtomicBool::new(true));
-        let running_clone = running.clone();
-
-        let (ctx, mut crx) = tokio::sync::mpsc::channel(1);
-
-        // Handle SIGINT
-        let sigint = tokio::spawn(async move {
-            let mut called = false;
-
-            loop {
-                tokio::select! {
-                    _ = tokio::signal::ctrl_c() => {
-                        if !called {
-                            debug!("SIGINT received");
-                            running_clone.store(false, std::sync::atomic::Ordering::Relaxed);
-                            called = true;
-                        }
-                        else {
-                            debug!("SIGINT received again, exiting");
-                            std::process::exit(0);
-                        }
-                    }
-                    _ = crx.recv() => {
-                        break;
-                    }
-                }
-            }
-        });
-
-        info!("Hello, world!");
-
-        // Start server
-        server::start(running).await;
-
-        ctx.send(true).await.unwrap();
-        sigint.await.unwrap();
-    });
-
-    // Cleanup
-    CONFIG.destroy(); // Save config
-
-    info!("Goodbye!");
-
-    Ok(())
+    smol::block_on(async {
+        info!("Hello World!");
+        run_server().await
+    })
 }

@@ -1,39 +1,28 @@
 [package]
 name = "snap_rs"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-[workspace]
-members = [
-    "proc_macros",
-]
+[lints.clippy]
+enum_glob_use = "deny"
+pedantic = "deny"
+nursery = "deny"
+unwrap_used = "deny"
+perf = "deny"
+all = "deny"
 
 [dependencies]
-# Crates
-snap_rs_proc_macros = { path = "proc_macros" }
-
 # Logging
-log = "0.4"
-fern = {version = "0.6", features = ["colored"]}
-chrono = "0.4"
+tracing = "0.1"
+tracing-subscriber = "0.3"
 
-# Config
-toml = "0.5"
-serde = {version = "1.0", features = ["derive"]}
-serde-toml-merge = "0.3"
-lazy_static = "1.4" # TODO: Remove this once LazyLock is in stable
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
 
-# Network
-slotmap = "1.0"
-paste = "1.0"
+nom = "8.0"
+rkyv = {version = "0.8", features = ["big_endian"]}
+uuid = "1.16"
 
-flate2 = { version = "1.0", features = ["zlib-ng"], default-features = false }
-libz-ng-sys = { version = "1.1", default-features = false }
-
-tokio = {version = "1.21", features = ["full"]}
-futures = "0.3"
-
-# Server
-serde_json = "1.0"
-ctrlc = "3.2"
+smol = "2.0"
+thiserror = "2.0"
