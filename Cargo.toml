@@ -1,27 +1,28 @@
 [package]
+edition = "2024"
 name = "snap_rs"
 version = "0.1.0"
-edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lints.clippy]
-enum_glob_use = "deny"
-pedantic = "deny"
-nursery = "deny"
-unwrap_used = "deny"
-perf = "deny"
 all = "deny"
+enum_glob_use = "deny"
+nursery = "deny"
+pedantic = "deny"
+perf = "deny"
+unwrap_used = "deny"
 
 [dependencies]
 # Logging
 tracing = "0.1"
 tracing-subscriber = "0.3"
 
-serde = { version = "1.0", features = ["derive"] }
+serde = {version = "1.0", features = ["derive"]}
 toml = "0.8"
 
 nom = "8.0"
-rkyv = {version = "0.8", features = ["big_endian"]}
+
+educe = "0.6"
 uuid = "1.16"
 
 smol = "2.0"
