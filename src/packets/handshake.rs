@@ -1,6 +1,7 @@
 use nom::{
     IResult,
     Parser,
+    bytes::tag,
     number::be_u16,
 };
 use tracing::{
@@ -18,6 +19,7 @@ use crate::{
         status::StatusClient,
     },
     parser::{
+        construct_varint,
         parse_string,
         parse_varint,
     },
@@ -62,25 +64,25 @@ impl StateParser for HandshakingClient {
     }
 
     fn parser(data: &[u8]) -> IResult<&[u8], Self::PacketType<'_>> {
-        let (data, packet_id) = parse_varint(data)?;
-        match packet_id {
-            0x00 => {
-                let (data, (protocol_version, server_address, server_port, next)) =
-                    (parse_varint, parse_string::<256>, be_u16(), parse_varint).parse(data)?;
-                Ok((data, HandshakePacket::Intention {
-                    protocol_version,
-                    server_address,
-                    server_port,
-                    next_state: match next {
-                        1 => NextState::Status,
-                        2 => NextState::Login,
-                        3 => NextState::Transfer,
-                        _ => unreachable!("Further states do not exist"),
-                    },
-                }))
+        let (data, (_, protocol_version, server_address, server_port, next)) = (
+            tag(&construct_varint::<0x00>()[..]),
+            parse_varint,
+            parse_string::<256>,
+            be_u16(),
+            parse_varint,
+        )
+            .parse(data)?;
+        Ok((data, HandshakePacket::Intention {
+            protocol_version,
+            server_address,
+            server_port,
+            next_state: match next {
+                1 => NextState::Status,
+                2 => NextState::Login,
+                3 => NextState::Transfer,
+                _ => unreachable!("Further states do not exist"),
             },
-            _ => unimplemented!("No other states exist for Packet Handshake"),
-        }
+        }))
     }
 
     async fn handle(

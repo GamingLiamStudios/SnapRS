@@ -64,6 +64,28 @@ pub fn parse_string<const MAX: i32>(data: &[u8]) -> IResult<&[u8], &str> {
         .parse(data)
 }
 
+pub const fn varint_len(value: i32) -> usize {
+    match value {
+        ..0 => 5,
+        0 => 1,
+        v => (1 + v.ilog2()).div_ceil(7) as usize,
+    }
+}
+
+pub const fn construct_varint<const VALUE: i32>() -> [u8; varint_len(VALUE)] {
+    let mut bytes = [0u8; varint_len(VALUE)];
+    let mut value = VALUE.cast_unsigned();
+    let mut index = 0;
+    while value != 0 {
+        bytes[index] = (value & 0x7f) as u8 | 0x80;
+        value >>= 7;
+
+        index += 1;
+    }
+    bytes[index.saturating_sub(1)] &= 0x7f;
+    bytes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

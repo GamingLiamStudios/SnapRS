@@ -1,6 +1,7 @@
 use nom::{
     IResult,
     Parser,
+    bytes::tag,
     multi::length_data,
     number::{
         be_u8,
@@ -14,6 +15,7 @@ use super::{
     StateParser,
 };
 use crate::parser::{
+    construct_varint,
     parse_string,
     parse_varint,
 };
@@ -46,6 +48,41 @@ pub enum LoginPacket<'a> {
     Ack,
 }
 
+impl<'a> LoginPacket<'a> {
+    fn start(data: &'a [u8]) -> IResult<&'a [u8], Self> {
+        let (data, username) = parse_string::<16>(data)?;
+        let (data, uuid) = be_u128().parse(data)?;
+        Ok((data, LoginPacket::Start {
+            name: username,
+            uuid: Uuid::from_u128(uuid),
+        }))
+    }
+
+    fn encryption(data: &'a [u8]) -> IResult<&'a [u8], Self> {
+        let (data, secret) = length_data(parse_varint.map(i32::cast_unsigned)).parse(data)?;
+        let (data, verify) = length_data(parse_varint.map(i32::cast_unsigned)).parse(data)?;
+        Ok((data, Self::Encryption { secret, verify }))
+    }
+
+    fn plugin(data: &'a [u8]) -> IResult<&'a [u8], Self> {
+        let (data, id) = parse_varint(data)?;
+        let (data, succeeded) = be_u8().parse(data)?;
+        assert!(
+            data.len() <= 1_048_576,
+            "Plugin Data Response is larger than expected"
+        );
+        Ok((data, LoginPacket::Plugin {
+            id,
+            data: if succeeded != 0 { Some(data) } else { None },
+        }))
+    }
+
+    #[allow(clippy::unnecessary_wraps)]
+    const fn ack(data: &'a [u8]) -> IResult<&'a [u8], Self> {
+        Ok((data, Self::Ack))
+    }
+}
+
 pub struct LoginClient {
     stream: ClientConnection,
 }
@@ -64,39 +101,14 @@ impl StateParser for LoginClient {
     }
 
     fn parser(data: &[u8]) -> IResult<&[u8], Self::PacketType<'_>> {
-        let (data, packet_id) = parse_varint(data)?;
-        match packet_id {
-            0x00 => {
-                let (data, username) = parse_string::<16>(data)?;
-                let (data, uuid) = be_u128().parse(data)?;
-                Ok((data, LoginPacket::Start {
-                    name: username,
-                    uuid: Uuid::from_u128(uuid),
-                }))
-            },
-            0x01 => {
-                let (data, (secret, verify)) = (
-                    length_data(parse_varint.map(i32::cast_unsigned)),
-                    length_data(parse_varint.map(i32::cast_unsigned)),
-                )
-                    .parse(data)?;
-                Ok((data, LoginPacket::Encryption { secret, verify }))
-            },
-            0x02 => {
-                let (data, id) = parse_varint(data)?;
-                let (data, succeeded) = be_u8().parse(data)?;
-                assert!(
-                    data.len() <= 1_048_576,
-                    "Plugin Data Response is larger than expected"
-                );
-                Ok((data, LoginPacket::Plugin {
-                    id,
-                    data: if succeeded != 0 { Some(data) } else { None },
-                }))
-            },
-            0x03 => Ok((data, LoginPacket::Ack)),
-            _ => unimplemented!("No other packets exist for Status"),
-        }
+        nom::branch::alt((
+            tag(&construct_varint::<0x00>()[..]).and(LoginPacket::start),
+            tag(&construct_varint::<0x01>()[..]).and(LoginPacket::encryption),
+            tag(&construct_varint::<0x02>()[..]).and(LoginPacket::plugin),
+            tag(&construct_varint::<0x03>()[..]).and(LoginPacket::ack),
+        ))
+        .parse(data)
+        .map(|(data, (_, packet))| (data, packet))
     }
 
     async fn handle(

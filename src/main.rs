@@ -1,5 +1,9 @@
-#![feature(iter_chain)]
-#![allow(clippy::ref_option_ref, clippy::used_underscore_binding)] // Hate having to do this
+#![feature(generic_const_exprs)]
+#![allow(
+    clippy::ref_option_ref,
+    clippy::used_underscore_binding,
+    incomplete_features
+)] // Hate having to do this
 
 use std::{
     error::Error,
@@ -29,14 +33,6 @@ use tracing_subscriber::{
 pub(crate) mod encode;
 mod packets;
 pub(crate) mod parser;
-
-const fn varint_len(value: i32) -> usize {
-    match value {
-        ..0 => 5,
-        0 => 1,
-        v => v.ilog2().div_ceil(7) as usize,
-    }
-}
 
 async fn run_server() -> Result<(), Box<dyn Error>> {
     let socket = smol::net::TcpListener::bind("127.0.0.1:25565").await?;

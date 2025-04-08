@@ -1,6 +1,7 @@
 use nom::{
     IResult,
     Parser,
+    bytes::streaming::tag,
     number::be_i64,
 };
 
@@ -8,7 +9,7 @@ use super::{
     ClientConnection,
     StateParser,
 };
-use crate::parser::parse_varint;
+use crate::parser::construct_varint;
 
 mod client;
 
@@ -17,6 +18,18 @@ mod client;
 pub enum StatusPacket {
     Request,
     Ping(i64),
+}
+
+impl StatusPacket {
+    #[allow(clippy::unnecessary_wraps)]
+    const fn request(data: &[u8]) -> IResult<&[u8], Self> {
+        Ok((data, Self::Request))
+    }
+
+    fn ping(data: &[u8]) -> IResult<&[u8], Self> {
+        let (data, timestamp) = be_i64().parse(data)?;
+        Ok((data, Self::Ping(timestamp)))
+    }
 }
 
 pub struct StatusClient {
@@ -37,15 +50,12 @@ impl StateParser for StatusClient {
     }
 
     fn parser(data: &[u8]) -> IResult<&[u8], Self::PacketType<'_>> {
-        let (data, packet_id) = parse_varint(data)?;
-        match packet_id {
-            0x00 => Ok((data, StatusPacket::Request)),
-            0x01 => {
-                let (data, timestamp) = be_i64().parse(data)?;
-                Ok((data, StatusPacket::Ping(timestamp)))
-            },
-            _ => unimplemented!("No other packets exist for Status"),
-        }
+        nom::branch::alt((
+            tag(&construct_varint::<0x00>()[..]).and(StatusPacket::request),
+            tag(&construct_varint::<0x01>()[..]).and(StatusPacket::ping),
+        ))
+        .parse(data)
+        .map(|(data, (_, packet))| (data, packet))
     }
 
     async fn handle(
