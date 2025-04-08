@@ -12,6 +12,7 @@ use nom::{
 use uuid::Uuid;
 
 use super::{
+    COMPRESSION_MIN_SIZE,
     ClientConnection,
     StateParser,
 };
@@ -127,7 +128,15 @@ impl StateParser for LoginClient {
             },
             LoginPacket::Start { name, uuid } => {
                 // TODO: Encryption
-                // TODO: Compression
+
+                let packet = client::Compression {
+                    max_size: COMPRESSION_MIN_SIZE,
+                };
+                self.stream
+                    .write_packet(packet)
+                    .await
+                    .expect("Failed to send packet");
+                self.stream.compression = true;
 
                 // For testing, lets craft a disconnect packet
                 let mut reason = TextComponent::new_text("Press ");

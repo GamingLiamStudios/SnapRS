@@ -1,7 +1,17 @@
+use std::io::{
+    Read,
+    Write,
+};
+
+use flate2::{
+    Compression,
+    bufread::ZlibDecoder,
+    write::ZlibEncoder,
+};
 use nom::{
     IResult,
     Parser,
-    multi::length_value,
+    multi::length_data,
 };
 use smol::{
     io::{
@@ -10,7 +20,10 @@ use smol::{
     },
     net::TcpStream,
 };
-use tracing::trace;
+use tracing::{
+    info,
+    trace,
+};
 
 use crate::{
     encode::{
@@ -23,6 +36,8 @@ use crate::{
 pub mod handshake;
 pub mod login;
 pub mod status;
+
+pub const COMPRESSION_MIN_SIZE: i32 = 256;
 
 #[derive(Debug)]
 pub enum PacketError {}
@@ -65,15 +80,46 @@ impl ClientConnection {
         &mut self,
         packet: P,
     ) -> std::io::Result<()> {
-        // TODO: Compression
-        trace!(?packet, "Sending Packet");
-        let bytes = encode::length_value((encode::write_varint(P::PACKET_ID), packet), |length| {
+        trace!(compression = self.compression, ?packet, "Sending Packet");
+        let packet = (encode::write_varint(P::PACKET_ID), packet)
+            .generate()
+            .expect("Shouldn't Error");
+
+        let inner = |buf: &mut Vec<u8>| {
+            if self.compression {
+                // Try to compress bytes
+                let mut deflate = ZlibEncoder::new(Vec::new(), Compression::best());
+                deflate
+                    .write_all(&packet)
+                    .expect("Failed to compress packet");
+                let compressed_bytes = deflate.flush_finish().expect("Failed to compress packet");
+                let inner_size = compressed_bytes.len();
+
+                if packet.len() < COMPRESSION_MIN_SIZE.cast_unsigned() as usize
+                    || inner_size > packet.len()
+                {
+                    (encode::write_varint::<PacketError>(0), packet.as_slice())
+                        .generate_in_place(buf)
+                } else {
+                    (
+                        encode::write_varint::<PacketError>(packet.len() as i32),
+                        compressed_bytes.as_slice(),
+                    )
+                        .generate_in_place(buf)
+                }
+            } else {
+                packet.as_slice().generate_in_place(buf)
+            }
+        };
+
+        let bytes = encode::length_value(inner, |length| {
             encode::write_varint(
                 i32::try_from(length).expect("Length of Packet was larger than i32::MAX"),
             )
         })
         .generate()
-        .expect("Shouldn't Error");
+        .expect("Shouldn't error");
+
         self.write_raw(&bytes).await
     }
 }
@@ -99,21 +145,46 @@ pub trait StateParser: Sized {
                 break;
             }
 
-            // TODO: Compression
             let next_read;
-            match length_value(parse_varint.map(i32::cast_unsigned), Self::parser)
-                .parse(&buffer[..index + read])
-            {
-                Ok((remain, packet)) => {
+            match length_data(parse_varint.map(i32::cast_unsigned)).parse(&buffer[..index + read]) {
+                Ok((remain, data)) => {
                     assert!(
                         remain.is_empty(),
                         "Remainder from packet extraction is not empty"
                     );
                     next_read = None;
 
-                    trace!(?packet, "Recv'd packet (size {})", index + read);
-                    if self.handle(packet).await {
-                        return;
+                    if self.stream().compression {
+                        let (data, inner_size) =
+                            parse_varint(data).expect("Failed to parse packet");
+                        if inner_size > 0 {
+                            // Decompress
+                            let mut bytes = vec![0u8; inner_size.cast_unsigned() as usize];
+                            let mut decoder = ZlibDecoder::new(data);
+                            decoder
+                                .read_exact(&mut bytes)
+                                .expect("Failed to decompress packet");
+
+                            let (_data, packet) =
+                                Self::parser(&bytes).expect("Failed to parse packet");
+                            trace!(?packet, "Recv'd packet (size {})", index + read);
+                            if self.handle(packet).await {
+                                return;
+                            }
+                        } else {
+                            let (_data, packet) =
+                                Self::parser(data).expect("Failed to parse packet");
+                            trace!(?packet, "Recv'd packet (size {})", index + read);
+                            if self.handle(packet).await {
+                                return;
+                            }
+                        }
+                    } else {
+                        let (_data, packet) = Self::parser(data).expect("Failed to parse packet");
+                        trace!(?packet, "Recv'd packet (size {})", index + read);
+                        if self.handle(packet).await {
+                            return;
+                        }
                     }
                 },
                 Err(nom::Err::Incomplete(needed)) => {

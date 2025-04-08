@@ -21,10 +21,11 @@ serde = {version = "1.0", features = ["derive"]}
 serde_json = "1.0"
 toml = "0.8"
 
+flate2 = {version = "1.1", features = ["zlib-rs"]}
 nom = "8.0"
+smol = "2.0"
 
 educe = "0.6"
 uuid = "1.16"
 
-smol = "2.0"
 thiserror = "2.0"
