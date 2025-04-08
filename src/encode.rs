@@ -1,11 +1,15 @@
 use tracing::warn;
 
 pub trait Generate<E> {
+    /// # Errors
+    /// Depends on implementation
     fn generate_in_place(
         &self,
         buf: &mut Vec<u8>,
     ) -> Result<usize, E>;
 
+    /// # Errors
+    /// See [`generate_in_place`](Generate::generate_in_place)
     fn generate(&self) -> Result<Vec<u8>, E> {
         let mut buf = Vec::new();
         let _ = self.generate_in_place(&mut buf)?;
@@ -24,13 +28,27 @@ impl<E, F: SerializeFn<E> + ?Sized> Generate<E> for F {
     }
 }
 
-impl<E> Generate<E> for &[u8] {
+impl<E, T: Generate<E>> Generate<E> for Option<T> {
     fn generate_in_place(
         &self,
         buf: &mut Vec<u8>,
     ) -> Result<usize, E> {
-        buf.extend_from_slice(self);
-        Ok(self.len())
+        self.as_ref()
+            .map_or_else(|| Ok(0), |value| value.generate_in_place(buf))
+    }
+}
+
+// Removes specialization for &[u8] however :(
+impl<E, T: Generate<E>> Generate<E> for &[T] {
+    fn generate_in_place(
+        &self,
+        buf: &mut Vec<u8>,
+    ) -> Result<usize, E> {
+        let mut running_total = 0;
+        for value in *self {
+            running_total += value.generate_in_place(buf)?;
+        }
+        Ok(running_total)
     }
 }
 
@@ -65,6 +83,7 @@ pub fn length_value<E, Fi: Generate<E>, Fo: Fn(usize) -> Fi>(
 }
 
 /// Uses least amount of bytes to write integer
+#[must_use]
 pub fn write_varint<E>(value: i32) -> impl SerializeFn<E> {
     move |buf| {
         let mut value = value.cast_unsigned();
@@ -88,6 +107,7 @@ pub fn write_varint<E>(value: i32) -> impl SerializeFn<E> {
 }
 
 /// Uses constant 5 bytes to write integer
+#[must_use]
 pub fn write_varint_fixed<E>(value: i32) -> impl SerializeFn<E> {
     let mut value = value.cast_unsigned();
     let mut nibbles: [u8; 5] = std::array::from_fn(|_| {
@@ -103,6 +123,9 @@ pub fn write_varint_fixed<E>(value: i32) -> impl SerializeFn<E> {
     }
 }
 
+/// # Panics
+/// Will panic if the specified string exceeds the specified bounds
+#[must_use]
 pub fn bounded_string<const BOUND: usize, E>(value: &str) -> impl SerializeFn<E> {
     let bytes = value.as_bytes();
     assert!(
@@ -132,7 +155,7 @@ macro_rules! impl_number {
     };
 }
 
-impl_number!(i8 u8 i16 u16 i32 u32 i64 u64 f32 f64);
+impl_number!(i8 u8 i16 u16 i32 u32 i64 u64 i128 u128 f32 f64);
 
 macro_rules! impl_tuple {
     ($($name: ident)+) => {

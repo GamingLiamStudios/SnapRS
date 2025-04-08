@@ -1,3 +1,4 @@
+#![allow(missing_docs, clippy::missing_errors_doc, clippy::missing_panics_doc)]
 use nom::{
     IResult,
     Parser,
@@ -64,6 +65,7 @@ pub fn parse_string<const MAX: i32>(data: &[u8]) -> IResult<&[u8], &str> {
         .parse(data)
 }
 
+#[must_use]
 pub const fn varint_len(value: i32) -> usize {
     match value {
         ..0 => 5,
@@ -72,6 +74,7 @@ pub const fn varint_len(value: i32) -> usize {
     }
 }
 
+#[must_use]
 pub const fn construct_varint<const VALUE: i32>() -> [u8; varint_len(VALUE)] {
     let mut bytes = [0u8; varint_len(VALUE)];
     let mut value = VALUE.cast_unsigned();

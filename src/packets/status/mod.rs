@@ -1,7 +1,7 @@
 use nom::{
     IResult,
     Parser,
-    bytes::streaming::tag,
+    bytes::tag,
     number::be_i64,
 };
 

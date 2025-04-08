@@ -1,9 +1,5 @@
 #![feature(generic_const_exprs)]
-#![allow(
-    clippy::ref_option_ref,
-    clippy::used_underscore_binding,
-    incomplete_features
-)] // Hate having to do this
+#![allow(incomplete_features)] // Hate having to do this
 
 use std::{
     error::Error,
@@ -30,9 +26,11 @@ use tracing_subscriber::{
     util::SubscriberInitExt,
 };
 
-pub(crate) mod encode;
 mod packets;
-pub(crate) mod parser;
+
+pub mod encode;
+pub mod parser;
+pub mod text;
 
 async fn run_server() -> Result<(), Box<dyn Error>> {
     let socket = smol::net::TcpListener::bind("127.0.0.1:25565").await?;

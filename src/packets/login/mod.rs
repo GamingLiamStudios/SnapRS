@@ -1,3 +1,4 @@
+#![allow(clippy::ref_option_ref, clippy::used_underscore_binding)]
 use nom::{
     IResult,
     Parser,
@@ -14,11 +15,16 @@ use super::{
     ClientConnection,
     StateParser,
 };
-use crate::parser::{
-    construct_varint,
-    parse_string,
-    parse_varint,
+use crate::{
+    parser::{
+        construct_varint,
+        parse_string,
+        parse_varint,
+    },
+    text::TextComponent,
 };
+
+pub mod client;
 
 fn fmt_plugin_response(
     v: &Option<&'_ [u8]>,
@@ -115,6 +121,29 @@ impl StateParser for LoginClient {
         &mut self,
         packet: Self::PacketType<'_>,
     ) -> bool {
-        unimplemented!()
+        match packet {
+            LoginPacket::Ack => {
+                unimplemented!("Configure state not yet implemented")
+            },
+            LoginPacket::Start { name, uuid } => {
+                // TODO: Encryption
+                // TODO: Compression
+
+                // For testing, lets craft a disconnect packet
+                let mut reason = TextComponent::new_text("Press ");
+                reason.add_child(TextComponent::new_keybind("key.jump").bold().italic());
+                reason.add_child(TextComponent::new_text(" to say \""));
+                reason.add_child(TextComponent::new_text("Apple").bold());
+                reason.add_child(TextComponent::new_text("\""));
+
+                let packet = client::Disconnect { reason };
+                self.stream
+                    .write_packet(packet)
+                    .await
+                    .expect("Failed to send packet");
+                true
+            },
+            _ => unimplemented!("Not yet implemented"),
+        }
     }
 }
