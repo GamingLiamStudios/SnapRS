@@ -6,6 +6,7 @@ use serde::{
 
 use crate::{
     encode::{
+        EncodeError,
         Generate,
         SerializeFn,
         bounded_string,
@@ -246,7 +247,10 @@ impl From<ParsingFormat> for TextComponent {
 }
 
 #[allow(clippy::missing_panics_doc, clippy::missing_errors_doc)]
-pub fn write_json_text_component<E, T: Into<TextComponent> + serde::Serialize>(
+pub fn write_json_text_component<
+    E: From<EncodeError>,
+    T: Into<TextComponent> + serde::Serialize,
+>(
     value: &T
 ) -> impl SerializeFn<E> {
     let json = serde_json::to_string(value).expect("Failed to encode TextComponent");

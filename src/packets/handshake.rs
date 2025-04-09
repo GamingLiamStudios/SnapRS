@@ -11,18 +11,13 @@ use tracing::{
 
 use super::{
     ClientConnection,
+    DummyError,
     StateParser,
 };
-use crate::{
-    packets::{
-        login::LoginClient,
-        status::StatusClient,
-    },
-    parser::{
-        construct_varint,
-        parse_string,
-        parse_varint,
-    },
+use crate::parser::{
+    construct_varint,
+    parse_string,
+    parse_varint,
 };
 
 #[derive(Debug)]
@@ -46,22 +41,17 @@ pub enum HandshakePacket<'a> {
     },
 }
 
-pub struct HandshakingClient {
-    stream: ClientConnection,
-}
+pub struct HandshakingClient {}
 
 impl HandshakingClient {
-    pub const fn new(stream: ClientConnection) -> Self {
-        Self { stream }
+    pub const fn new() -> Self {
+        Self {}
     }
 }
 
 impl StateParser for HandshakingClient {
+    type Error = DummyError;
     type PacketType<'a> = HandshakePacket<'a>;
-
-    fn stream(&mut self) -> &mut ClientConnection {
-        &mut self.stream
-    }
 
     fn parser(data: &[u8]) -> IResult<&[u8], Self::PacketType<'_>> {
         let (data, (_, protocol_version, server_address, server_port, next)) = (
@@ -85,11 +75,20 @@ impl StateParser for HandshakingClient {
         }))
     }
 
+    async fn handle_disconnect(
+        &mut self,
+        _client: &mut ClientConnection,
+        _reason: &crate::text::TextComponent,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
     async fn handle(
         &mut self,
+        _client: &mut ClientConnection,
         packet: Self::PacketType<'_>,
-    ) -> bool {
-        match packet {
+    ) -> Result<super::NextState, Self::Error> {
+        Ok(match packet {
             HandshakePacket::Intention {
                 protocol_version,
                 server_address: _,
@@ -101,19 +100,19 @@ impl StateParser for HandshakingClient {
                         protocol_version,
                         "Attempted connection from incompatible client"
                     );
-                    return false; // Quit the client
+                    return Err(DummyError); // Quit the client
                 }
 
                 match next_state {
                     NextState::Status => {
                         // Enter status flow
                         info!("Entering Status netflow");
-                        StatusClient::new(self.stream.clone()).listen().await;
+                        super::NextState::Status
                     },
                     NextState::Login => {
                         // Enter login flow
                         info!("Entering Login netflow");
-                        LoginClient::new(self.stream.clone()).listen().await;
+                        super::NextState::Login
                     },
                     NextState::Transfer => {
                         unimplemented!("i honestly have no idea what this is");
@@ -123,8 +122,6 @@ impl StateParser for HandshakingClient {
             HandshakePacket::LegacyPing {} => {
                 unimplemented!("Legacy ping unimplemented");
             },
-        }
-
-        true
+        })
     }
 }

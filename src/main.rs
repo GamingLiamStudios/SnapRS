@@ -10,13 +10,13 @@ use packets::{
     ClientConnection,
     StateParser,
     handshake::HandshakingClient,
+    login::LoginClient,
+    status::StatusClient,
 };
 use smol::stream::StreamExt;
 use tracing::{
     debug,
     info,
-    trace,
-    warn,
 };
 use tracing_subscriber::{
     Layer,
@@ -47,9 +47,17 @@ async fn run_server() -> Result<(), Box<dyn Error>> {
                 Pin<Box<dyn Future<Output = ()>>>,
                 Pin<Box<dyn Future<Output = ()> + 'static + Send>>,
             >(Box::pin(async move {
-                HandshakingClient::new(ClientConnection::new(stream))
-                    .listen()
-                    .await;
+                let mut client = ClientConnection::new(stream);
+                let mut next_state = HandshakingClient::new().listen(&mut client).await;
+                loop {
+                    next_state = match next_state {
+                        packets::NextState::None => break,
+                        packets::NextState::Status => StatusClient::new().listen(&mut client).await,
+                        packets::NextState::Login => LoginClient::new().listen(&mut client).await,
+                        packets::NextState::Configure { player: _ }
+                        | packets::NextState::Play { player: _ } => todo!(),
+                    }
+                }
                 info!("Connection closed");
             }))
         })

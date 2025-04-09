@@ -1,4 +1,24 @@
-use tracing::warn;
+use crate::text::TextComponent;
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub enum EncodeError {
+    MalformedVarint,
+    StringBounds,
+}
+
+impl EncodeError {
+    #[must_use]
+    pub fn describe(self) -> TextComponent {
+        match self {
+            Self::MalformedVarint => {
+                TextComponent::new_text("Server attempted to send malformed varint")
+            },
+            Self::StringBounds => {
+                TextComponent::new_text("Server attempted to send too large of a string")
+            },
+        }
+    }
+}
 
 pub trait Generate<E> {
     /// # Errors
@@ -84,7 +104,7 @@ pub fn length_value<E, Fi: Generate<E>, Fo: Fn(usize) -> Fi>(
 
 /// Uses least amount of bytes to write integer
 #[must_use]
-pub fn write_varint<E>(value: i32) -> impl SerializeFn<E> {
+pub fn write_varint<E: From<EncodeError>>(value: i32) -> impl SerializeFn<E> {
     move |buf| {
         let mut value = value.cast_unsigned();
 
@@ -101,8 +121,7 @@ pub fn write_varint<E>(value: i32) -> impl SerializeFn<E> {
             }
         }
 
-        warn!("Malformed Varint; Clipped at 5 bytes");
-        Ok(5)
+        Err(EncodeError::MalformedVarint.into())
     }
 }
 
@@ -126,16 +145,22 @@ pub fn write_varint_fixed<E>(value: i32) -> impl SerializeFn<E> {
 /// # Panics
 /// Will panic if the specified string exceeds the specified bounds
 #[must_use]
-pub fn bounded_string<const BOUND: usize, E>(value: &str) -> impl SerializeFn<E> {
+pub fn bounded_string<const BOUND: usize, E: From<EncodeError>>(
+    value: &str
+) -> impl SerializeFn<E> {
     let bytes = value.as_bytes();
-    assert!(
-        bytes.len() <= BOUND * 3,
-        "String was larger than valid bounds"
-    );
-
-    length_value(bytes, |length| {
-        write_varint(i32::try_from(length).expect("Length of Packet was larger than i32::MAX"))
-    })
+    move |buf| {
+        if bytes.len() <= BOUND * 3 {
+            length_value(bytes, |length| {
+                write_varint(
+                    i32::try_from(length).expect("Length of Packet was larger than i32::MAX"),
+                )
+            })
+            .generate_in_place(buf)
+        } else {
+            Err(EncodeError::StringBounds.into())
+        }
+    }
 }
 
 macro_rules! impl_number {
@@ -195,12 +220,9 @@ impl_tuple!(A B C D E F G H I J K L M N O P Q R S T);
 mod tests {
     use super::*;
 
-    #[derive(Debug, PartialEq, Eq)]
-    struct DummyError {}
-
     #[allow(clippy::needless_pass_by_value)]
     fn test_generator(
-        encoder: impl Generate<DummyError>,
+        encoder: impl Generate<EncodeError>,
         expected: &[u8],
     ) {
         let vector = encoder.generate();

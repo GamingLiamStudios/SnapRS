@@ -7,9 +7,14 @@ use nom::{
 
 use super::{
     ClientConnection,
+    DummyError,
+    NextState,
     StateParser,
 };
-use crate::parser::construct_varint;
+use crate::{
+    parser::construct_varint,
+    text::TextComponent,
+};
 
 mod client;
 
@@ -32,22 +37,17 @@ impl StatusPacket {
     }
 }
 
-pub struct StatusClient {
-    stream: ClientConnection,
-}
+pub struct StatusClient {}
 
 impl StatusClient {
-    pub const fn new(stream: ClientConnection) -> Self {
-        Self { stream }
+    pub const fn new() -> Self {
+        Self {}
     }
 }
 
 impl StateParser for StatusClient {
+    type Error = DummyError;
     type PacketType<'a> = StatusPacket;
-
-    fn stream(&mut self) -> &mut ClientConnection {
-        &mut self.stream
-    }
 
     fn parser(data: &[u8]) -> IResult<&[u8], Self::PacketType<'_>> {
         nom::branch::alt((
@@ -60,22 +60,30 @@ impl StateParser for StatusClient {
 
     async fn handle(
         &mut self,
+        client: &mut ClientConnection,
         packet: Self::PacketType<'_>,
-    ) -> bool {
+    ) -> Result<NextState, Self::Error> {
         match packet {
             StatusPacket::Request => {
                 // Send Response packet
-                _ = self.stream.write_packet(client::StatusResponse {}).await;
-                false
+                client.write_packet(client::StatusResponse {}).await?;
+                Ok(NextState::None)
             },
             StatusPacket::Ping(timestamp) => {
                 // Send pong packet
-                _ = self
-                    .stream
+                client
                     .write_packet(client::StatusPong { timestamp })
-                    .await;
-                true
+                    .await?;
+                Err(DummyError)
             },
         }
+    }
+
+    async fn handle_disconnect(
+        &mut self,
+        _client: &mut ClientConnection,
+        _reason: &TextComponent,
+    ) -> Result<(), Self::Error> {
+        Ok(())
     }
 }

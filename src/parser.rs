@@ -59,7 +59,7 @@ pub fn parse_varlong(data: &[u8]) -> IResult<&[u8], i64> {
 }
 
 pub fn parse_string<const MAX: i32>(data: &[u8]) -> IResult<&[u8], &str> {
-    assert!(MAX <= 32767, "Invalid Maximum Size");
+    assert!(MAX <= 32767, "Invalid Maximum Size"); // TODO: const_assert this
     length_data(verify(parse_varint, |v| *v <= (MAX * 3)).map(i32::cast_unsigned))
         .map_res(|v| str::from_utf8(v))
         .parse(data)

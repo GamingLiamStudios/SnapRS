@@ -14,9 +14,12 @@ use uuid::Uuid;
 use super::{
     COMPRESSION_MIN_SIZE,
     ClientConnection,
+    NextState,
+    PacketError,
     StateParser,
 };
 use crate::{
+    encode::EncodeError,
     parser::{
         construct_varint,
         parse_string,
@@ -26,6 +29,46 @@ use crate::{
 };
 
 pub mod client;
+
+#[derive(Debug)]
+pub enum LoginError {
+    Dummy,
+    OversizedPluginData,
+    Encode(EncodeError),
+    Io(std::io::Error),
+}
+
+impl From<std::io::Error> for LoginError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+
+impl From<EncodeError> for LoginError {
+    fn from(value: EncodeError) -> Self {
+        Self::Encode(value)
+    }
+}
+
+impl PacketError for LoginError {
+    fn describe(&self) -> TextComponent {
+        match self {
+            Self::Dummy => {
+                let mut reason = TextComponent::new_text("Press ");
+                reason.add_child(TextComponent::new_keybind("key.jump").bold().italic());
+                reason.add_child(TextComponent::new_text(" to say \""));
+                reason.add_child(TextComponent::new_text("Apple").bold());
+                reason.add_child(TextComponent::new_text("\""));
+                reason
+            },
+            Self::OversizedPluginData => {
+                TextComponent::new_text("Server attempted to send oversize Plugin Payload")
+            },
+            Self::Encode(error) => error.describe(),
+            Self::Io(error) => TextComponent::new_text(error.to_string()),
+        }
+    }
+}
 
 fn fmt_plugin_response(
     v: &Option<&'_ [u8]>,
@@ -74,14 +117,17 @@ impl<'a> LoginPacket<'a> {
     fn plugin(data: &'a [u8]) -> IResult<&'a [u8], Self> {
         let (data, id) = parse_varint(data)?;
         let (data, succeeded) = be_u8().parse(data)?;
-        assert!(
-            data.len() <= 1_048_576,
-            "Plugin Data Response is larger than expected"
-        );
-        Ok((data, LoginPacket::Plugin {
-            id,
-            data: if succeeded != 0 { Some(data) } else { None },
-        }))
+        if data.len() > 1_048_576 {
+            Err(nom::Err::Error(nom::error::Error::new(
+                data,
+                nom::error::ErrorKind::TooLarge,
+            )))
+        } else {
+            Ok((data, LoginPacket::Plugin {
+                id,
+                data: if succeeded != 0 { Some(data) } else { None },
+            }))
+        }
     }
 
     #[allow(clippy::unnecessary_wraps)]
@@ -90,22 +136,17 @@ impl<'a> LoginPacket<'a> {
     }
 }
 
-pub struct LoginClient {
-    stream: ClientConnection,
-}
+pub struct LoginClient {}
 
 impl LoginClient {
-    pub const fn new(stream: ClientConnection) -> Self {
-        Self { stream }
+    pub const fn new() -> Self {
+        Self {}
     }
 }
 
 impl StateParser for LoginClient {
+    type Error = LoginError;
     type PacketType<'a> = LoginPacket<'a>;
-
-    fn stream(&mut self) -> &mut ClientConnection {
-        &mut self.stream
-    }
 
     fn parser(data: &[u8]) -> IResult<&[u8], Self::PacketType<'_>> {
         nom::branch::alt((
@@ -120,8 +161,9 @@ impl StateParser for LoginClient {
 
     async fn handle(
         &mut self,
+        client: &mut ClientConnection,
         packet: Self::PacketType<'_>,
-    ) -> bool {
+    ) -> Result<NextState, Self::Error> {
         match packet {
             LoginPacket::Ack => {
                 unimplemented!("Configure state not yet implemented")
@@ -132,27 +174,25 @@ impl StateParser for LoginClient {
                 let packet = client::Compression {
                     max_size: COMPRESSION_MIN_SIZE,
                 };
-                self.stream
+                client
                     .write_packet(packet)
                     .await
                     .expect("Failed to send packet");
-                self.stream.compression = true;
+                client.compression = true;
 
                 // For testing, lets craft a disconnect packet
-                let mut reason = TextComponent::new_text("Press ");
-                reason.add_child(TextComponent::new_keybind("key.jump").bold().italic());
-                reason.add_child(TextComponent::new_text(" to say \""));
-                reason.add_child(TextComponent::new_text("Apple").bold());
-                reason.add_child(TextComponent::new_text("\""));
-
-                let packet = client::Disconnect { reason };
-                self.stream
-                    .write_packet(packet)
-                    .await
-                    .expect("Failed to send packet");
-                true
+                Err(LoginError::Dummy)
             },
             _ => unimplemented!("Not yet implemented"),
         }
+    }
+
+    async fn handle_disconnect(
+        &mut self,
+        client: &mut ClientConnection,
+        reason: &TextComponent,
+    ) -> Result<(), Self::Error> {
+        let packet = client::Disconnect { reason };
+        client.write_packet(packet).await
     }
 }

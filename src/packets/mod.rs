@@ -21,16 +21,18 @@ use smol::{
     net::TcpStream,
 };
 use tracing::{
-    info,
     trace,
+    warn,
 };
 
 use crate::{
     encode::{
         self,
+        EncodeError,
         Generate,
     },
     parser::parse_varint,
+    text::TextComponent,
 };
 
 pub mod handshake;
@@ -39,10 +41,32 @@ pub mod status;
 
 pub const COMPRESSION_MIN_SIZE: i32 = 256;
 
-#[derive(Debug)]
-pub enum PacketError {}
+pub trait PacketError: std::fmt::Debug + From<EncodeError> + From<std::io::Error> {
+    fn describe(&self) -> TextComponent;
+}
 
-pub trait PacketBuilder: Generate<PacketError> + std::fmt::Debug {
+#[derive(Debug)]
+pub struct DummyError;
+
+impl From<std::io::Error> for DummyError {
+    fn from(_value: std::io::Error) -> Self {
+        Self
+    }
+}
+
+impl From<EncodeError> for DummyError {
+    fn from(_value: EncodeError) -> Self {
+        Self
+    }
+}
+
+impl PacketError for DummyError {
+    fn describe(&self) -> TextComponent {
+        TextComponent::new_text("Unreachable error")
+    }
+}
+
+pub trait PacketBuilder<E: PacketError>: Generate<E> + std::fmt::Debug {
     const PACKET_ID: i32;
 }
 
@@ -76,14 +100,12 @@ impl ClientConnection {
     }
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-    pub async fn write_packet<P: PacketBuilder>(
+    pub async fn write_packet<E: PacketError, P: PacketBuilder<E>>(
         &mut self,
         packet: P,
-    ) -> std::io::Result<()> {
+    ) -> Result<(), E> {
         trace!(compression = self.compression, ?packet, "Sending Packet");
-        let packet = (encode::write_varint(P::PACKET_ID), packet)
-            .generate()
-            .expect("Shouldn't Error");
+        let packet = (encode::write_varint(P::PACKET_ID), packet).generate()?;
 
         let inner = |buf: &mut Vec<u8>| {
             if self.compression {
@@ -98,11 +120,10 @@ impl ClientConnection {
                 if packet.len() < COMPRESSION_MIN_SIZE.cast_unsigned() as usize
                     || inner_size > packet.len()
                 {
-                    (encode::write_varint::<PacketError>(0), packet.as_slice())
-                        .generate_in_place(buf)
+                    (encode::write_varint::<E>(0), packet.as_slice()).generate_in_place(buf)
                 } else {
                     (
-                        encode::write_varint::<PacketError>(packet.len() as i32),
+                        encode::write_varint(packet.len() as i32),
                         compressed_bytes.as_slice(),
                     )
                         .generate_in_place(buf)
@@ -117,30 +138,54 @@ impl ClientConnection {
                 i32::try_from(length).expect("Length of Packet was larger than i32::MAX"),
             )
         })
-        .generate()
-        .expect("Shouldn't error");
+        .generate()?;
 
-        self.write_raw(&bytes).await
+        self.write_raw(&bytes)
+            .await
+            .map_err(std::convert::Into::into)
     }
 }
 
+pub type PlayerId = uuid::Uuid;
+
+#[derive(Debug)]
+pub enum NextState {
+    None,
+
+    Status,
+    Login,
+
+    Configure { player: PlayerId },
+    Play { player: PlayerId },
+}
+
 pub trait StateParser: Sized {
+    type Error: PacketError;
     type PacketType<'a>: std::fmt::Debug;
     fn parser(data: &[u8]) -> IResult<&[u8], Self::PacketType<'_>>;
 
-    fn stream(&mut self) -> &mut ClientConnection;
+    // Allows different states to handle disconnects differently
+    async fn handle_disconnect(
+        &mut self,
+        client: &mut ClientConnection,
+        reason: &TextComponent,
+    ) -> Result<(), Self::Error>;
 
     async fn handle(
         &mut self,
+        client: &mut ClientConnection,
         packet: Self::PacketType<'_>,
-    ) -> bool;
+    ) -> Result<NextState, Self::Error>;
 
-    async fn listen(mut self) {
+    async fn listen(
+        mut self,
+        client: &mut ClientConnection,
+    ) -> NextState {
         let mut buffer = vec![0; 2048];
         let mut index = 0;
 
         buffer.resize(2, 0);
-        while let Ok(read) = self.stream().read_raw(&mut buffer[index..]).await {
+        while let Ok(read) = client.read_raw(&mut buffer[index..]).await {
             if read == 0 {
                 break;
             }
@@ -154,7 +199,7 @@ pub trait StateParser: Sized {
                     );
                     next_read = None;
 
-                    if self.stream().compression {
+                    let result = if client.compression {
                         let (data, inner_size) =
                             parse_varint(data).expect("Failed to parse packet");
                         if inner_size > 0 {
@@ -167,24 +212,36 @@ pub trait StateParser: Sized {
 
                             let (_data, packet) =
                                 Self::parser(&bytes).expect("Failed to parse packet");
-                            trace!(?packet, "Recv'd packet (size {})", index + read);
-                            if self.handle(packet).await {
-                                return;
-                            }
+                            trace!(?packet, "Recv'd packet (Compressed, size {})", index + read);
+                            self.handle(client, packet).await
                         } else {
                             let (_data, packet) =
                                 Self::parser(data).expect("Failed to parse packet");
-                            trace!(?packet, "Recv'd packet (size {})", index + read);
-                            if self.handle(packet).await {
-                                return;
-                            }
+                            trace!(
+                                ?packet,
+                                "Recv'd packet (Uncompressed, size {})",
+                                index + read
+                            );
+                            self.handle(client, packet).await
                         }
                     } else {
                         let (_data, packet) = Self::parser(data).expect("Failed to parse packet");
-                        trace!(?packet, "Recv'd packet (size {})", index + read);
-                        if self.handle(packet).await {
-                            return;
-                        }
+                        trace!(
+                            ?packet,
+                            "Recv'd packet (Uncompressed, size {})",
+                            index + read
+                        );
+                        self.handle(client, packet).await
+                    };
+
+                    match result {
+                        Ok(NextState::None) => (),
+                        Ok(next_state) => return next_state,
+                        Err(error) => {
+                            let reason = error.describe();
+                            let _ = self.handle_disconnect(client, &reason).await;
+                            break;
+                        },
                     }
                 },
                 Err(nom::Err::Incomplete(needed)) => {
@@ -195,10 +252,15 @@ pub trait StateParser: Sized {
 
                     index += read;
                 },
-                error => {
-                    // TODO: Safe failure
-                    _ = error.expect("Parser Failure");
-                    next_read = None;
+                Err(error) => {
+                    warn!(?error, "Parser failure");
+                    let _ = self
+                        .handle_disconnect(
+                            client,
+                            &TextComponent::new_text("Sent Invalid data to Server"),
+                        )
+                        .await;
+                    break;
                 },
             }
 
@@ -212,5 +274,6 @@ pub trait StateParser: Sized {
             buffer.clear();
             buffer.resize(2, 0);
         }
+        NextState::None
     }
 }
