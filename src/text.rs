@@ -19,8 +19,9 @@ use crate::{
 // Possible specialization?
 type Selector = String;
 
-const fn default_seperator() -> Option<Box<TextComponent>> {
-    None // TODO
+#[allow(clippy::unnecessary_wraps)]
+fn default_seperator() -> Option<Box<TextComponent>> {
+    Some(Box::new(TextComponent::new_text(", ").color("gray")))
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
