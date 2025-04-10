@@ -11,13 +11,7 @@ use nom::{
 };
 use uuid::Uuid;
 
-use super::{
-    COMPRESSION_MIN_SIZE,
-    ClientConnection,
-    NextState,
-    PacketError,
-    StateParser,
-};
+use super::PacketError;
 use crate::{
     encode::EncodeError,
     parser::{
@@ -32,7 +26,6 @@ pub mod client;
 
 #[derive(Debug)]
 pub enum LoginError {
-    Dummy,
     OversizedPluginData,
     Encode(EncodeError),
     Io(std::io::Error),
@@ -53,14 +46,6 @@ impl From<EncodeError> for LoginError {
 impl PacketError for LoginError {
     fn describe(&self) -> TextComponent {
         match self {
-            Self::Dummy => {
-                let mut reason = TextComponent::new_text("Press ");
-                reason.add_child(TextComponent::new_keybind("key.jump").bold().italic());
-                reason.add_child(TextComponent::new_text(" to say \""));
-                reason.add_child(TextComponent::new_text("Apple").bold());
-                reason.add_child(TextComponent::new_text("\""));
-                reason
-            },
             Self::OversizedPluginData => {
                 TextComponent::new_text("Server attempted to send oversize Plugin Payload")
             },
@@ -134,65 +119,15 @@ impl<'a> LoginPacket<'a> {
     const fn ack(data: &'a [u8]) -> IResult<&'a [u8], Self> {
         Ok((data, Self::Ack))
     }
-}
 
-pub struct LoginClient {}
-
-impl LoginClient {
-    pub const fn new() -> Self {
-        Self {}
-    }
-}
-
-impl StateParser for LoginClient {
-    type Error = LoginError;
-    type PacketType<'a> = LoginPacket<'a>;
-
-    fn parser(data: &[u8]) -> IResult<&[u8], Self::PacketType<'_>> {
+    pub fn parse(data: &'a [u8]) -> IResult<&'a [u8], Self> {
         nom::branch::alt((
-            tag(&construct_varint::<0x00>()[..]).and(LoginPacket::start),
-            tag(&construct_varint::<0x01>()[..]).and(LoginPacket::encryption),
-            tag(&construct_varint::<0x02>()[..]).and(LoginPacket::plugin),
-            tag(&construct_varint::<0x03>()[..]).and(LoginPacket::ack),
+            tag(&construct_varint::<0x00>()[..]).and(Self::start),
+            tag(&construct_varint::<0x01>()[..]).and(Self::encryption),
+            tag(&construct_varint::<0x02>()[..]).and(Self::plugin),
+            tag(&construct_varint::<0x03>()[..]).and(Self::ack),
         ))
         .parse(data)
         .map(|(data, (_, packet))| (data, packet))
-    }
-
-    async fn handle(
-        &mut self,
-        client: &mut ClientConnection,
-        packet: Self::PacketType<'_>,
-    ) -> Result<NextState, Self::Error> {
-        match packet {
-            LoginPacket::Ack => {
-                unimplemented!("Configure state not yet implemented")
-            },
-            LoginPacket::Start { name, uuid } => {
-                // TODO: Encryption
-
-                let packet = client::Compression {
-                    max_size: COMPRESSION_MIN_SIZE,
-                };
-                client
-                    .write_packet(packet)
-                    .await
-                    .expect("Failed to send packet");
-                client.compression = true;
-
-                // For testing, lets craft a disconnect packet
-                Err(LoginError::Dummy)
-            },
-            _ => unimplemented!("Not yet implemented"),
-        }
-    }
-
-    async fn handle_disconnect(
-        &mut self,
-        client: &mut ClientConnection,
-        reason: &TextComponent,
-    ) -> Result<(), Self::Error> {
-        let packet = client::Disconnect { reason };
-        client.write_packet(packet).await
     }
 }

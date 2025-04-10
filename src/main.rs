@@ -1,18 +1,8 @@
-#![feature(generic_const_exprs)]
+#![feature(generic_const_exprs, new_range_api)]
 #![allow(incomplete_features)] // Hate having to do this
 
-use std::{
-    error::Error,
-    pin::Pin,
-};
+use std::error::Error;
 
-use packets::{
-    ClientConnection,
-    StateParser,
-    handshake::HandshakingClient,
-    login::LoginClient,
-    status::StatusClient,
-};
 use smol::stream::StreamExt;
 use tracing::{
     debug,
@@ -26,6 +16,7 @@ use tracing_subscriber::{
     util::SubscriberInitExt,
 };
 
+mod client;
 mod packets;
 
 pub mod encode;
@@ -42,26 +33,7 @@ async fn run_server() -> Result<(), Box<dyn Error>> {
         debug!(addr = ?stream.peer_addr(), "New client connection");
 
         // Spawn a new task for each client
-        smol::spawn(unsafe {
-            std::mem::transmute::<
-                Pin<Box<dyn Future<Output = ()>>>,
-                Pin<Box<dyn Future<Output = ()> + 'static + Send>>,
-            >(Box::pin(async move {
-                let mut client = ClientConnection::new(stream);
-                let mut next_state = HandshakingClient::new().listen(&mut client).await;
-                loop {
-                    next_state = match next_state {
-                        packets::NextState::None => break,
-                        packets::NextState::Status => StatusClient::new().listen(&mut client).await,
-                        packets::NextState::Login => LoginClient::new().listen(&mut client).await,
-                        packets::NextState::Configure { player: _ }
-                        | packets::NextState::Play { player: _ } => todo!(),
-                    }
-                }
-                info!("Connection closed");
-            }))
-        })
-        .await;
+        smol::spawn(client::spawn(stream)).await;
     }
 
     Ok(())

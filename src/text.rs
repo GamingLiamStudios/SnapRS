@@ -103,6 +103,7 @@ pub struct TextComponent {
     // TODO: Specialize
     color: Option<String>,
 
+    // TODO: Replace these with state machine?
     #[serde(default = "default_font")]
     font:          String,
     #[serde(default = "default_modifier")]

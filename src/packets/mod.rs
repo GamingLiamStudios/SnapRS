@@ -9,7 +9,6 @@ use flate2::{
     write::ZlibEncoder,
 };
 use nom::{
-    IResult,
     Parser,
     multi::length_data,
 };
@@ -35,7 +34,7 @@ use crate::{
     text::TextComponent,
 };
 
-pub mod handshake;
+pub mod configure;
 pub mod login;
 pub mod status;
 
@@ -73,23 +72,42 @@ pub trait PacketBuilder<E: PacketError>: Generate<E> + std::fmt::Debug {
 // TODO: Encryption
 #[derive(Clone)]
 pub struct ClientConnection {
-    stream:          TcpStream,
+    stream: TcpStream,
+
+    buffer_index: usize,
+    read_buffer:  Vec<u8>,
+
     pub compression: bool,
 }
 
 impl ClientConnection {
-    pub const fn new(stream: TcpStream) -> Self {
+    pub fn new(stream: TcpStream) -> Self {
         Self {
             stream,
+            buffer_index: 0,
+            read_buffer: Vec::with_capacity(2048),
             compression: false,
         }
     }
 
-    pub async fn read_raw(
+    pub const fn reset(&mut self) {
+        self.buffer_index = 0;
+    }
+
+    pub fn take(&self) -> &[u8] {
+        &self.read_buffer[..self.buffer_index]
+    }
+
+    pub async fn read_to(
         &mut self,
-        buffer: &mut [u8],
-    ) -> std::io::Result<usize> {
-        self.stream.read(buffer).await
+        want: usize,
+    ) -> std::io::Result<()> {
+        let index = self.buffer_index;
+        self.buffer_index = want;
+        self.read_buffer.resize(want, 0);
+        self.stream
+            .read_exact(&mut self.read_buffer[index..want])
+            .await
     }
 
     pub async fn write_raw(
@@ -146,134 +164,52 @@ impl ClientConnection {
     }
 }
 
-pub type PlayerId = uuid::Uuid;
+/// Listens for the next packet from a client
+///
+/// Returns the  packet data in the `buf` parameter
+pub async fn recv_packet(
+    client: &mut ClientConnection,
+    buf: &mut Vec<u8>,
+) -> std::io::Result<()> {
+    buf.clear();
 
-#[derive(Debug)]
-pub enum NextState {
-    None,
+    let packet_data = {
+        client.reset();
+        let mut packet_size = 2;
+        loop {
+            trace!("Reading {packet_size} bytes");
+            client.read_to(packet_size).await?;
+            trace!(bytes = client.take());
 
-    Status,
-    Login,
-
-    Configure { player: PlayerId },
-    Play { player: PlayerId },
-}
-
-pub trait StateParser: Sized {
-    type Error: PacketError;
-    type PacketType<'a>: std::fmt::Debug;
-    fn parser(data: &[u8]) -> IResult<&[u8], Self::PacketType<'_>>;
-
-    // Allows different states to handle disconnects differently
-    async fn handle_disconnect(
-        &mut self,
-        client: &mut ClientConnection,
-        reason: &TextComponent,
-    ) -> Result<(), Self::Error>;
-
-    async fn handle(
-        &mut self,
-        client: &mut ClientConnection,
-        packet: Self::PacketType<'_>,
-    ) -> Result<NextState, Self::Error>;
-
-    async fn listen(
-        mut self,
-        client: &mut ClientConnection,
-    ) -> NextState {
-        let mut buffer = vec![0; 2048];
-        let mut index = 0;
-
-        buffer.resize(2, 0);
-        while let Ok(read) = client.read_raw(&mut buffer[index..]).await {
-            if read == 0 {
-                break;
-            }
-
-            let next_read;
-            match length_data(parse_varint.map(i32::cast_unsigned)).parse(&buffer[..index + read]) {
-                Ok((remain, data)) => {
-                    assert!(
-                        remain.is_empty(),
-                        "Remainder from packet extraction is not empty"
-                    );
-                    next_read = None;
-
-                    let result = if client.compression {
-                        let (data, inner_size) =
-                            parse_varint(data).expect("Failed to parse packet");
-                        if inner_size > 0 {
-                            // Decompress
-                            let mut bytes = vec![0u8; inner_size.cast_unsigned() as usize];
-                            let mut decoder = ZlibDecoder::new(data);
-                            decoder
-                                .read_exact(&mut bytes)
-                                .expect("Failed to decompress packet");
-
-                            let (_data, packet) =
-                                Self::parser(&bytes).expect("Failed to parse packet");
-                            trace!(?packet, "Recv'd packet (Compressed, size {})", index + read);
-                            self.handle(client, packet).await
-                        } else {
-                            let (_data, packet) =
-                                Self::parser(data).expect("Failed to parse packet");
-                            trace!(
-                                ?packet,
-                                "Recv'd packet (Uncompressed, size {})",
-                                index + read
-                            );
-                            self.handle(client, packet).await
-                        }
-                    } else {
-                        let (_data, packet) = Self::parser(data).expect("Failed to parse packet");
-                        trace!(
-                            ?packet,
-                            "Recv'd packet (Uncompressed, size {})",
-                            index + read
-                        );
-                        self.handle(client, packet).await
-                    };
-
-                    match result {
-                        Ok(NextState::None) => (),
-                        Ok(next_state) => return next_state,
-                        Err(error) => {
-                            let reason = error.describe();
-                            let _ = self.handle_disconnect(client, &reason).await;
-                            break;
-                        },
-                    }
+            match length_data(parse_varint.map(i32::cast_unsigned)).parse(client.take()) {
+                Ok((_, packet_data)) => {
+                    break packet_data;
                 },
-                Err(nom::Err::Incomplete(needed)) => {
-                    next_read = Some(match needed {
-                        nom::Needed::Unknown => buffer.len(), // just double the size
-                        nom::Needed::Size(n) => n.into(),
-                    });
-
-                    index += read;
+                Err(nom::Err::Incomplete(nom::Needed::Unknown)) => unreachable!(),
+                Err(nom::Err::Incomplete(nom::Needed::Size(needed))) => {
+                    packet_size += usize::from(needed);
                 },
-                Err(error) => {
+                Err(nom::Err::Failure(error) | nom::Err::Error(error)) => {
                     warn!(?error, "Parser failure");
-                    let _ = self
-                        .handle_disconnect(
-                            client,
-                            &TextComponent::new_text("Sent Invalid data to Server"),
-                        )
-                        .await;
-                    break;
+                    return Err(std::io::ErrorKind::InvalidData.into());
                 },
             }
-
-            if let Some(needed) = next_read {
-                trace!("Read {read} bytes, needed {}", read + needed);
-                buffer.resize(index + needed, 0);
-                continue;
-            }
-
-            index = 0;
-            buffer.clear();
-            buffer.resize(2, 0);
         }
-        NextState::None
+    };
+
+    if client.compression {
+        let (payload, inner_size) =
+            parse_varint(packet_data).map_err(|_| std::io::ErrorKind::InvalidData)?;
+
+        if inner_size == 0 {
+            buf.extend_from_slice(payload);
+        } else {
+            // Decompress payload into buf
+            let mut decoder = ZlibDecoder::new(payload);
+            decoder.read_exact(buf)?;
+        }
+    } else {
+        buf.extend_from_slice(packet_data);
     }
+    Ok(())
 }
