@@ -260,6 +260,15 @@ pub fn write_json_text_component<
 }
 
 #[allow(clippy::missing_panics_doc, clippy::missing_errors_doc)]
+pub fn write_text_component<E: From<EncodeError>, T: Into<TextComponent> + serde::Serialize>(
+    value: &T
+) -> impl SerializeFn<E> {
+    let nbt =
+        crab_nbt::serde::ser::to_bytes_unnamed(value).expect("Failed to encode TextComponent");
+    move |buf| (&nbt[..]).generate_in_place(buf)
+}
+
+#[allow(clippy::missing_panics_doc, clippy::missing_errors_doc)]
 pub fn parse_json_text_component(data: &[u8]) -> IResult<&[u8], TextComponent> {
     let (data, json) = parse_string::<262_144>(data)?;
     let parsed: ParsingFormat = serde_json::from_str(json).expect("Failed to parse TextComponent");

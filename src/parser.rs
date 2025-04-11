@@ -6,8 +6,11 @@ use nom::{
         bits,
         streaming as bits,
     },
+    branch::alt,
+    bytes::tag,
     combinator::{
         map,
+        value,
         verify,
     },
     multi::{
@@ -19,6 +22,8 @@ use nom::{
         preceded,
     },
 };
+
+pub const IDENTIFIER_MAX_LEN: i32 = 32767;
 
 pub fn parse_varbits<const P: u8>(data: &[u8]) -> IResult<&[u8], u8> {
     bits::<_, _, nom::error::Error<(&[u8], usize)>, _, _>(preceded(
@@ -65,6 +70,14 @@ pub fn parse_string<const MAX: i32>(data: &[u8]) -> IResult<&[u8], &str> {
         .parse(data)
 }
 
+pub fn parse_bool(data: &[u8]) -> IResult<&[u8], bool> {
+    alt((
+        value(false, tag(&[0x00][..])),
+        value(true, tag(&[0x01][..])),
+    ))
+    .parse(data)
+}
+
 #[must_use]
 pub const fn varint_len(value: i32) -> usize {
     match value {
@@ -87,6 +100,13 @@ pub const fn construct_varint<const VALUE: i32>() -> [u8; varint_len(VALUE)] {
     }
     bytes[index.saturating_sub(1)] &= 0x7f;
     bytes
+}
+
+pub fn tag_varint<const VALUE: i32>(data: &[u8]) -> IResult<&[u8], &[u8]>
+where
+    [(); varint_len(VALUE)]:,
+{
+    tag(&construct_varint::<VALUE>()[..]).parse(data)
 }
 
 #[cfg(test)]

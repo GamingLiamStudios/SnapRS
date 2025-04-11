@@ -177,9 +177,7 @@ pub async fn recv_packet(
         client.reset();
         let mut packet_size = 2;
         loop {
-            trace!("Reading {packet_size} bytes");
             client.read_to(packet_size).await?;
-            trace!(bytes = client.take());
 
             match length_data(parse_varint.map(i32::cast_unsigned)).parse(client.take()) {
                 Ok((_, packet_data)) => {
@@ -197,6 +195,10 @@ pub async fn recv_packet(
         }
     };
 
+    if packet_data.len() >= 2usize.pow(21) {
+        return Err(std::io::ErrorKind::FileTooLarge.into());
+    }
+
     if client.compression {
         let (payload, inner_size) =
             parse_varint(packet_data).map_err(|_| std::io::ErrorKind::InvalidData)?;
@@ -204,6 +206,10 @@ pub async fn recv_packet(
         if inner_size == 0 {
             buf.extend_from_slice(payload);
         } else {
+            if inner_size > 2i32.pow(23) {
+                return Err(std::io::ErrorKind::FileTooLarge.into());
+            }
+
             // Decompress payload into buf
             let mut decoder = ZlibDecoder::new(payload);
             decoder.read_exact(buf)?;
@@ -211,5 +217,8 @@ pub async fn recv_packet(
     } else {
         buf.extend_from_slice(packet_data);
     }
+
+    trace!(bytes = buf.as_slice(), "Recv'd Packet");
+
     Ok(())
 }

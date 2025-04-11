@@ -5,15 +5,23 @@ use nom::{
 };
 use smol::net::TcpStream;
 use tracing::{
+    debug,
     info,
+    trace,
     warn,
 };
+use uuid::Uuid;
 
 use crate::{
+    encode::{
+        self,
+        Generate,
+    },
     packets::{
         self,
         COMPRESSION_MIN_SIZE,
         ClientConnection,
+        DummyError,
     },
     parser::{
         construct_varint,
@@ -23,6 +31,76 @@ use crate::{
     text::TextComponent,
 };
 
+fn handle_plugin_message(
+    channel: &str,
+    data: &[u8],
+) -> Vec<u8> {
+    let mut buffer = Vec::new();
+    match channel {
+        "minecraft:brand" => {
+            // Parse client data
+            let (_, client_brand) =
+                parse_string::<32767>(data).expect("Failed to parse brand channel");
+            info!("Client has brand {client_brand}");
+
+            _ = encode::bounded_string::<32767, DummyError>("SnapRS")
+                .generate_in_place(&mut buffer);
+        },
+        channel => {
+            debug!("Recieved data from unknown channel {channel}");
+        },
+    }
+
+    buffer
+}
+
+async fn handle_login(
+    client: &mut ClientConnection,
+    buffer: &mut Vec<u8>,
+) -> std::io::Result<(String, Uuid)> {
+    use packets::login::{
+        LoginPacket,
+        client,
+    };
+
+    packets::recv_packet(client, buffer).await?;
+    let Ok((_, LoginPacket::Start { name, uuid })) = LoginPacket::parse(buffer) else {
+        return Err(std::io::ErrorKind::InvalidData.into());
+    };
+    let name = name.to_owned(); // Own it, since buffer isn't constant
+    info!("{name} ({uuid}) Attempting connection");
+
+    let packet = client::Compression {
+        max_size: COMPRESSION_MIN_SIZE,
+    };
+    if let Err(error) = client.write_packet(packet).await {
+        warn!(?error, "Failed to enable compression for packet");
+        return Err(std::io::ErrorKind::InvalidData.into());
+    }
+    client.compression = true;
+
+    // TODO: Encryption flow
+
+    let packet = client::Success {
+        username: &name,
+        uuid,
+        properties: Vec::new(),
+    };
+    if let Err(error) = client.write_packet(packet).await {
+        warn!(?error, "Failed to complete Login process");
+        return Err(std::io::ErrorKind::InvalidData.into());
+    }
+
+    packets::recv_packet(client, buffer).await?;
+    let Ok((_, LoginPacket::Ack)) = LoginPacket::parse(buffer) else {
+        return Err(std::io::ErrorKind::InvalidData.into());
+    };
+    trace!("Got Login Ack");
+
+    Ok((name, uuid))
+}
+
+#[allow(clippy::too_many_lines)]
 pub async fn spawn(stream: TcpStream) {
     let mut client = ClientConnection::new(stream);
 
@@ -89,40 +167,65 @@ pub async fn spawn(stream: TcpStream) {
     }
 
     // Do Login
+    let Ok((name, _uuid)) = handle_login(&mut client, &mut buffer).await else {
+        return;
+    };
+
+    // Do configuration flow
     {
-        use packets::login::{
-            LoginPacket,
+        use packets::configure::{
+            ConfigurePacket,
             client,
         };
 
-        if packets::recv_packet(&mut client, &mut buffer)
-            .await
-            .is_err()
-        {
-            return;
+        loop {
+            if packets::recv_packet(&mut client, &mut buffer)
+                .await
+                .is_err()
+            {
+                warn!("Client left suddenly");
+                return;
+            }
+            match ConfigurePacket::parse(&buffer) {
+                Ok((_, ConfigurePacket::PluginMessage { channel, data })) => {
+                    // Respond with channel data
+                    let response = handle_plugin_message(channel, data);
+
+                    let packet = client::PluginMessage {
+                        channel,
+                        data: &response,
+                    };
+                    _ = client.write_packet(packet).await;
+                },
+                Ok((
+                    _,
+                    ConfigurePacket::Information {
+                        locale: _,
+                        view_distance,
+                        chat_mode: _,
+                        chat_colors: _,
+                        enabled_skin: _,
+                        main_hand: _,
+                        text_filtering: _,
+                        server_listings: _,
+                    },
+                )) => {
+                    info!("Sending disconnect");
+                    let reason = TextComponent::new_text(format!("Only {view_distance} chunks?"));
+                    let response = client::Disconnect { reason: &reason };
+                    _ = client.write_packet(response).await;
+                    return;
+                },
+                Ok((_, packet)) => {
+                    info!(?packet, "{name} sent config packet");
+                },
+                Err(nom::Err::Incomplete(_)) => {
+                    warn!("Client sent incomplete packet");
+                },
+                Err(nom::Err::Error(error) | nom::Err::Failure(error)) => {
+                    warn!(?error, "Unknown Packet?");
+                },
+            }
         }
-        let Ok((_, LoginPacket::Start { name, uuid })) = LoginPacket::parse(&buffer) else {
-            return;
-        };
-        info!("{name} ({uuid}) Attempting connection");
-
-        let packet = client::Compression {
-            max_size: COMPRESSION_MIN_SIZE,
-        };
-        client
-            .write_packet(packet)
-            .await
-            .expect("Failed to send packet");
-        client.compression = true;
-
-        let mut reason = TextComponent::new_text("Press ");
-        reason.add_child(TextComponent::new_keybind("key.jump").bold().italic());
-        reason.add_child(TextComponent::new_text(" to say \""));
-        reason.add_child(TextComponent::new_text("Apple").bold());
-        reason.add_child(TextComponent::new_text("\""));
-
-        _ = client
-            .write_packet(client::Disconnect { reason: &reason })
-            .await;
     }
 }
