@@ -3,6 +3,7 @@ use std::io::{
     Write,
 };
 
+use bitflags::bitflags;
 use flate2::{
     Compression,
     bufread::ZlibDecoder,
@@ -36,6 +37,7 @@ use crate::{
 
 pub mod configure;
 pub mod login;
+pub mod play;
 pub mod status;
 
 pub const COMPRESSION_MIN_SIZE: i32 = 256;
@@ -221,4 +223,30 @@ pub async fn recv_packet(
     trace!(bytes = buf.as_slice(), "Recv'd Packet");
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ChatMode {
+    Enabled,
+    CommandsOnly,
+    Disabled,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum MainHand {
+    Left,
+    Right,
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    pub struct EnabledSkinParts: u8 {
+        const Cape          = 1 << 0;
+        const Jacked        = 1 << 1;
+        const LeftSleeve    = 1 << 2;
+        const RightSleeve   = 1 << 3;
+        const LeftLeg       = 1 << 4;
+        const RightLeg      = 1 << 5;
+        const Hat           = 1 << 6;
+    }
 }

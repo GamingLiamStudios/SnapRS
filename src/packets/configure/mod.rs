@@ -16,7 +16,12 @@ use nom::{
 };
 use uuid::Uuid;
 
-use super::PacketError;
+use super::{
+    ChatMode,
+    EnabledSkinParts,
+    MainHand,
+    PacketError,
+};
 use crate::{
     encode::EncodeError,
     parser::{
@@ -71,19 +76,6 @@ impl PacketError for ConfigureError {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum ChatMode {
-    Enabled,
-    CommandsOnly,
-    Disabled,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum MainHand {
-    Left,
-    Right,
-}
-
-#[derive(Debug, Clone, Copy)]
 pub enum ClientResouceResponse {
     DownloadSuccess,
     Declined,
@@ -93,19 +85,6 @@ pub enum ClientResouceResponse {
     InvalidURL,
     ReloadFail,
     Discard,
-}
-
-bitflags! {
-    #[derive(Debug, Clone, Copy)]
-    pub struct EnabledSkinParts: u8 {
-        const Cape          = 1 << 0;
-        const Jacked        = 1 << 1;
-        const LeftSleeve    = 1 << 2;
-        const RightSleeve   = 1 << 3;
-        const LeftLeg       = 1 << 4;
-        const RightLeg      = 1 << 5;
-        const Hat           = 1 << 6;
-    }
 }
 
 #[derive(Debug)]

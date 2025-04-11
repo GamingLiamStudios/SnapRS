@@ -22,6 +22,7 @@ use crate::{
         COMPRESSION_MIN_SIZE,
         ClientConnection,
         DummyError,
+        play::PlayPacket,
     },
     parser::{
         construct_varint,
@@ -235,5 +236,24 @@ pub async fn spawn(stream: TcpStream) {
     };
 
     info!(render_distance, ?uuid, "{name} Connected");
-    smol::Timer::never().await;
+
+    // For the client to begin sending packets, we need to send 2 key packets
+    // Login & SynchronizePosition
+    // Only after these can we start sending chunking packets
+
+    loop {
+        // TODO: Send Disconnect reason on failure
+        if packets::recv_packet(&mut client, &mut buffer)
+            .await
+            .is_err()
+        {
+            break;
+        }
+        let Ok((_, packet)) = PlayPacket::parse(&buffer) else {
+            break;
+        };
+
+        debug!(?packet);
+    }
+    info!("Done with {name}");
 }
