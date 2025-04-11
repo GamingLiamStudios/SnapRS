@@ -54,6 +54,63 @@ fn handle_plugin_message(
     buffer
 }
 
+async fn handle_configure(
+    client: &mut ClientConnection,
+    buffer: &mut Vec<u8>,
+    name: &str,
+) -> std::io::Result<i8> {
+    use packets::configure::{
+        ConfigurePacket,
+        client,
+    };
+
+    let mut render_distance = 16;
+    loop {
+        packets::recv_packet(client, buffer).await?;
+        match ConfigurePacket::parse(buffer) {
+            Ok((_, ConfigurePacket::PluginMessage { channel, data })) => {
+                // Respond with channel data
+                let response = handle_plugin_message(channel, data);
+
+                let packet = client::PluginMessage {
+                    channel,
+                    data: &response,
+                };
+                _ = client.write_packet(packet).await;
+            },
+            Ok((
+                _,
+                ConfigurePacket::Information {
+                    locale: _,
+                    view_distance,
+                    chat_mode: _,
+                    chat_colors: _,
+                    enabled_skin: _,
+                    main_hand: _,
+                    text_filtering: _,
+                    server_listings: _,
+                },
+            )) => {
+                _ = client.write_packet(client::Finish).await;
+                render_distance = view_distance;
+            },
+            Ok((_, ConfigurePacket::AckFinish)) => break,
+            Ok((_, packet)) => {
+                info!(?packet, "{name} sent config packet");
+            },
+            Err(nom::Err::Incomplete(_)) => {
+                warn!("Client sent incomplete packet");
+                return Err(std::io::ErrorKind::BrokenPipe.into());
+            },
+            Err(nom::Err::Error(error) | nom::Err::Failure(error)) => {
+                warn!(?error, "Unknown Packet?");
+            },
+        }
+    }
+
+    Ok(render_distance)
+}
+
 async fn handle_login(
     client: &mut ClientConnection,
     buffer: &mut Vec<u8>,
@@ -68,7 +125,6 @@ async fn handle_login(
         return Err(std::io::ErrorKind::InvalidData.into());
     };
     let name = name.to_owned(); // Own it, since buffer isn't constant
-    info!("{name} ({uuid}) Attempting connection");
 
     let packet = client::Compression {
         max_size: COMPRESSION_MIN_SIZE,
@@ -167,65 +223,17 @@ pub async fn spawn(stream: TcpStream) {
     }
 
     // Do Login
-    let Ok((name, _uuid)) = handle_login(&mut client, &mut buffer).await else {
+    let Ok((name, uuid)) = handle_login(&mut client, &mut buffer).await else {
         return;
     };
 
     // Do configuration flow
-    {
-        use packets::configure::{
-            ConfigurePacket,
-            client,
-        };
+    // TODO: Add ResourcePack support
+    // TODO: Actually use the info from here more
+    let Ok(render_distance) = handle_configure(&mut client, &mut buffer, &name).await else {
+        return;
+    };
 
-        loop {
-            if packets::recv_packet(&mut client, &mut buffer)
-                .await
-                .is_err()
-            {
-                warn!("Client left suddenly");
-                return;
-            }
-            match ConfigurePacket::parse(&buffer) {
-                Ok((_, ConfigurePacket::PluginMessage { channel, data })) => {
-                    // Respond with channel data
-                    let response = handle_plugin_message(channel, data);
-
-                    let packet = client::PluginMessage {
-                        channel,
-                        data: &response,
-                    };
-                    _ = client.write_packet(packet).await;
-                },
-                Ok((
-                    _,
-                    ConfigurePacket::Information {
-                        locale: _,
-                        view_distance,
-                        chat_mode: _,
-                        chat_colors: _,
-                        enabled_skin: _,
-                        main_hand: _,
-                        text_filtering: _,
-                        server_listings: _,
-                    },
-                )) => {
-                    info!("Sending disconnect");
-                    let reason = TextComponent::new_text(format!("Only {view_distance} chunks?"));
-                    let response = client::Disconnect { reason: &reason };
-                    _ = client.write_packet(response).await;
-                    return;
-                },
-                Ok((_, packet)) => {
-                    info!(?packet, "{name} sent config packet");
-                },
-                Err(nom::Err::Incomplete(_)) => {
-                    warn!("Client sent incomplete packet");
-                },
-                Err(nom::Err::Error(error) | nom::Err::Failure(error)) => {
-                    warn!(?error, "Unknown Packet?");
-                },
-            }
-        }
-    }
+    info!(render_distance, ?uuid, "{name} Connected");
+    smol::Timer::never().await;
 }

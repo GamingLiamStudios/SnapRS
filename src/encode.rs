@@ -48,7 +48,7 @@ impl<E, F: SerializeFn<E> + ?Sized> Generate<E> for F {
     }
 }
 
-impl<E, T: Generate<E>> Generate<E> for Option<T> {
+impl<E, F: SerializeFn<E>> Generate<E> for Option<F> {
     fn generate_in_place(
         &self,
         buf: &mut Vec<u8>,
