@@ -22,6 +22,7 @@ mod packets;
 pub mod encode;
 pub mod parser;
 pub mod text;
+pub mod world;
 
 async fn run_server() -> Result<(), Box<dyn Error>> {
     let socket = smol::net::TcpListener::bind("127.0.0.1:25565").await?;

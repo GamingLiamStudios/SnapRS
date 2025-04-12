@@ -85,6 +85,21 @@ pub fn cond<E>(
     }
 }
 
+#[must_use]
+/// # Panics
+/// Will panic if the input posision is outside the constraints for a Position;
+/// - x, z -> 26 bits
+/// - y -> 12 bits
+pub fn position<E>(position: vek::Vec3<i32>) -> impl SerializeFn<E> {
+    assert!(position.x <= 2i32.pow(26), "X Coord OOB for Position Type");
+    assert!(position.z <= 2i32.pow(26), "Z Coord OOB for Position Type");
+    assert!(position.y <= 2i32.pow(12), "Y Coord OOB for Position Type");
+    let pos_raw = (u64::from(position.x.cast_unsigned()) << (26 + 12))
+        | (u64::from(position.z.cast_unsigned()) << 12)
+        | u64::from(position.y.cast_unsigned());
+    move |buf| pos_raw.generate_in_place(buf)
+}
+
 pub fn length_value<E, Fi: Generate<E>, Fo: Fn(usize) -> Fi>(
     value: impl Generate<E>,
     length_writer: Fo,

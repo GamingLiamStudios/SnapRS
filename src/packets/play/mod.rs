@@ -18,16 +18,60 @@ use super::{
     ChatMode,
     EnabledSkinParts,
     MainHand,
+    PacketError,
 };
-use crate::parser::{
-    IDENTIFIER_MAX_LEN,
-    parse_bool,
-    parse_string,
-    parse_varint,
-    tag_varint,
+use crate::{
+    encode::EncodeError,
+    parser::{
+        IDENTIFIER_MAX_LEN,
+        parse_bool,
+        parse_string,
+        parse_varint,
+        tag_varint,
+    },
+    text::TextComponent,
 };
 
 pub mod client;
+
+#[derive(Debug)]
+pub enum PlayError {
+    OversizedPluginData,
+    NbtEncode(crab_nbt::error::Error),
+    Encode(EncodeError),
+    Io(std::io::Error),
+}
+
+impl From<std::io::Error> for PlayError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+
+impl From<crab_nbt::error::Error> for PlayError {
+    fn from(value: crab_nbt::error::Error) -> Self {
+        Self::NbtEncode(value)
+    }
+}
+
+impl From<EncodeError> for PlayError {
+    fn from(value: EncodeError) -> Self {
+        Self::Encode(value)
+    }
+}
+
+impl PacketError for PlayError {
+    fn describe(&self) -> TextComponent {
+        match self {
+            Self::OversizedPluginData => {
+                TextComponent::new_text("Server attempted to send oversize Plugin Payload")
+            },
+            Self::NbtEncode(error) => TextComponent::new_text(error.to_string()),
+            Self::Encode(error) => error.describe(),
+            Self::Io(error) => TextComponent::new_text(error.to_string()),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum PlayPacket<'a> {

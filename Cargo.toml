@@ -31,3 +31,4 @@ educe = "0.6"
 uuid = "1.16"
 
 thiserror = "2.0"
+vek = {version = "0.17", features = []}

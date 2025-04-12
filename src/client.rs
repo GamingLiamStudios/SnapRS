@@ -32,6 +32,15 @@ use crate::{
     text::TextComponent,
 };
 
+#[derive(Debug)]
+#[repr(u8)]
+pub enum Gamemode {
+    Survival = 0,
+    Creative,
+    Adventure,
+    Spectator,
+}
+
 fn handle_plugin_message(
     channel: &str,
     data: &[u8],
