@@ -1,3 +1,4 @@
+use crab_nbt::NbtCompound;
 use uuid::Uuid;
 
 use super::ConfigureError;
@@ -114,14 +115,14 @@ impl Generate<ConfigureError> for Ping {
 // TODO: Test this with actual registry data
 #[derive(Debug)]
 pub struct RegistryData {
-    data: crab_nbt::NbtCompound,
+    data: crab_nbt::Nbt,
 }
 
 impl RegistryData {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            data: crab_nbt::NbtCompound::new(),
+            data: crab_nbt::Nbt::new("root".to_string(), NbtCompound::new()),
         }
     }
 
@@ -130,7 +131,7 @@ impl RegistryData {
         &mut self,
         data: crab_nbt::Nbt,
     ) {
-        self.data.put(data.name, data.root_tag);
+        self.data.root_tag.put(data.name, data.root_tag);
     }
 }
 
@@ -144,7 +145,7 @@ impl Generate<ConfigureError> for RegistryData {
         buf: &mut Vec<u8>,
     ) -> Result<usize, ConfigureError> {
         let before = buf.len();
-        self.data.serialize_content_to_writer(&mut *buf)?;
+        self.data.write_unnamed_to_writer(&mut *buf)?;
         Ok(buf.len() - before)
     }
 }

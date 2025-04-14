@@ -7,3 +7,5 @@ target/
 
 # Program specific
 test/
+generated/
+server.jar

@@ -1,4 +1,4 @@
-#![feature(generic_const_exprs, new_range_api)]
+#![feature(generic_const_exprs, new_range_api, int_roundings)]
 #![allow(incomplete_features)] // Hate having to do this
 
 use std::error::Error;
@@ -23,6 +23,8 @@ pub mod encode;
 pub mod parser;
 pub mod text;
 pub mod world;
+
+pub mod blocks;
 
 async fn run_server() -> Result<(), Box<dyn Error>> {
     let socket = smol::net::TcpListener::bind("127.0.0.1:25565").await?;

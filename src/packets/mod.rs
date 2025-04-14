@@ -21,6 +21,7 @@ use smol::{
     net::TcpStream,
 };
 use tracing::{
+    debug,
     trace,
     warn,
 };
@@ -126,6 +127,7 @@ impl ClientConnection {
     ) -> Result<(), E> {
         trace!(compression = self.compression, ?packet, "Sending Packet");
         let packet = (encode::write_varint(P::PACKET_ID), packet).generate()?;
+        //trace!(?packet);
 
         let inner = |buf: &mut Vec<u8>| {
             if self.compression {

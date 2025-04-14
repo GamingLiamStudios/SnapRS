@@ -1,3 +1,10 @@
+use bitflags::bitflags;
+use crab_nbt::nbt;
+use vek::{
+    Vec2,
+    Vec3,
+};
+
 use super::PlayError;
 use crate::{
     client::Gamemode,
@@ -218,7 +225,7 @@ pub enum GameEvent {
     ElderGuardian,
     DisableRespawnScreen(bool),
     EnableLimitedCraft(bool),
-    WairForChunks,
+    WaitForChunks,
 }
 
 impl PacketBuilder<PlayError> for GameEvent {
@@ -255,14 +262,14 @@ impl Generate<PlayError> for GameEvent {
             Self::ElderGuardian => (10u8, 0f32),
             Self::DisableRespawnScreen(disabled) => (11u8, if *disabled { 1f32 } else { 0f32 }),
             Self::EnableLimitedCraft(enabled) => (12u8, if *enabled { 1f32 } else { 0f32 }),
-            Self::WairForChunks => (13u8, 0f32),
+            Self::WaitForChunks => (13u8, 0f32),
         }
         .generate_in_place(buf)
     }
 }
 
 #[derive(Debug)]
-pub struct KeepAlive(i64);
+pub struct KeepAlive(pub i64);
 
 impl PacketBuilder<PlayError> for KeepAlive {
     const PACKET_ID: i32 = 0x24;
@@ -279,10 +286,10 @@ impl Generate<PlayError> for KeepAlive {
 
 #[derive(Debug)]
 pub struct ChunkFull<'a> {
-    chunk_x: i32,
-    chunk_z: i32,
+    pub chunk_x: i32,
+    pub chunk_z: i32,
 
-    chunk: &'a Chunk,
+    pub chunk: &'a Chunk,
 }
 
 impl PacketBuilder<PlayError> for ChunkFull<'_> {
@@ -292,10 +299,20 @@ impl PacketBuilder<PlayError> for ChunkFull<'_> {
 impl Generate<PlayError> for ChunkFull<'_> {
     fn generate_in_place(
         &self,
-        _buf: &mut Vec<u8>,
+        buf: &mut Vec<u8>,
     ) -> Result<usize, PlayError> {
-        todo!()
-        // TODO: This absolute unit of a packet
+        (
+            self.chunk_x,
+            self.chunk_z,
+            self.chunk,
+            0u8,
+            0u8,
+            0u8,
+            0u8,
+            0u8,
+            0u8,
+        )
+            .generate_in_place(buf)
     }
 }
 
@@ -324,31 +341,31 @@ impl Generate<PlayError> for ChunkLight<'_> {
 #[derive(Debug)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Login<'a> {
-    eid:        i32,
-    last_death: Option<(&'a str, vek::Vec3<i32>)>,
+    pub eid:        i32,
+    pub last_death: Option<(&'a str, vek::Vec3<i32>)>,
 
     // TODO: Refactor hardcore into a gamemode (Hardcore Creative doesn't make sense :p)
-    hardcore:      bool,
-    gamemode:      Gamemode,
-    prev_gamemode: Option<Gamemode>,
+    pub hardcore:      bool,
+    pub gamemode:      Gamemode,
+    pub prev_gamemode: Option<Gamemode>,
 
-    dimensions:     Vec<&'a str>,
-    dimension_type: &'a str,
-    dimension_name: &'a str,
+    pub dimensions:     Vec<&'a str>,
+    pub dimension_type: &'a str,
+    pub dimension_name: &'a str,
 
-    max_players:   i32,
-    view_distance: i32,
-    sim_distance:  i32,
+    pub max_players:   i32,
+    pub view_distance: i32,
+    pub sim_distance:  i32,
 
-    reduced_debug:    bool,
-    respawn_screen:   bool,
-    limited_crafting: bool,
+    pub reduced_debug:    bool,
+    pub respawn_screen:   bool,
+    pub limited_crafting: bool,
 
-    hashed_seed: i64, // First 8 bytes of SHA-256 of world seed
-    is_debug:    bool,
-    is_flat:     bool,
+    pub hashed_seed: i64, // First 8 bytes of SHA-256 of world seed
+    pub is_debug:    bool,
+    pub is_flat:     bool,
 
-    portal_cooldown: i32,
+    pub portal_cooldown: i32,
 }
 
 impl PacketBuilder<PlayError> for Login<'_> {
@@ -358,9 +375,108 @@ impl PacketBuilder<PlayError> for Login<'_> {
 impl Generate<PlayError> for Login<'_> {
     fn generate_in_place(
         &self,
-        _buf: &mut Vec<u8>,
+        buf: &mut Vec<u8>,
     ) -> Result<usize, PlayError> {
-        todo!()
-        // TODO: This absolute unit of a packet
+        let mut dimension_bytes = Vec::new();
+        for dim in &self.dimensions {
+            encode::bounded_string::<{ IDENTIFIER_MAX_LEN as usize }, PlayError>(dim)
+                .generate_in_place(&mut dimension_bytes)?;
+        }
+
+        (
+            self.eid,
+            self.hardcore,
+            encode::write_varint(
+                i32::try_from(self.dimensions.len()).expect("Length was larger than i32::MAX"),
+            ),
+            dimension_bytes.as_slice(),
+            encode::write_varint(self.max_players),
+            encode::write_varint(self.view_distance),
+            encode::write_varint(self.sim_distance),
+            self.reduced_debug,
+            self.respawn_screen,
+            self.limited_crafting,
+            encode::bounded_string::<{ IDENTIFIER_MAX_LEN as usize }, _>(self.dimension_type),
+            encode::bounded_string::<{ IDENTIFIER_MAX_LEN as usize }, _>(self.dimension_name),
+            self.hashed_seed,
+            self.gamemode as u8,
+            self.prev_gamemode.map_or(-1, |v| v as i8),
+            self.is_debug,
+            self.is_flat,
+            self.last_death.is_some(),
+            self.last_death.map(|(dimension, location)| {
+                (
+                    encode::bounded_string::<{ IDENTIFIER_MAX_LEN as usize }, _>(dimension),
+                    encode::position(location),
+                )
+            }),
+            encode::write_varint(self.portal_cooldown),
+        )
+            .generate_in_place(buf)
+    }
+}
+
+#[derive(Debug)]
+pub struct CenterChunk {
+    pub chunk_x: i32,
+    pub chunk_z: i32,
+}
+
+impl PacketBuilder<PlayError> for CenterChunk {
+    const PACKET_ID: i32 = 0x52;
+}
+
+impl Generate<PlayError> for CenterChunk {
+    fn generate_in_place(
+        &self,
+        buf: &mut Vec<u8>,
+    ) -> Result<usize, PlayError> {
+        (
+            encode::write_varint(self.chunk_x),
+            encode::write_varint(self.chunk_z),
+        )
+            .generate_in_place(buf)
+    }
+}
+
+bitflags! {
+    #[derive(Debug, Copy, Clone)]
+    pub struct PosRelativeFlags : u8 {
+        const X = 1 << 0;
+        const Y = 1 << 1;
+        const Z = 1 << 2;
+        const PITCH = 1 << 3;
+        const YAW = 1 << 4;
+    }
+}
+
+#[derive(Debug)]
+pub struct SyncPlayerPos {
+    pub pos:   Vec3<f64>,
+    pub rot:   Vec2<f32>,
+    pub flags: PosRelativeFlags,
+
+    pub teleport_id: i32,
+}
+
+impl PacketBuilder<PlayError> for SyncPlayerPos {
+    const PACKET_ID: i32 = 0x3e;
+}
+
+impl Generate<PlayError> for SyncPlayerPos {
+    fn generate_in_place(
+        &self,
+        buf: &mut Vec<u8>,
+    ) -> Result<usize, PlayError> {
+        (
+            self.pos.x,
+            self.pos.y,
+            self.pos.z,
+            self.rot.x,
+            self.rot.y,
+            self.flags.bits(),
+            encode::write_varint(self.teleport_id),
+        )
+            .generate_in_place(buf)
     }
 }

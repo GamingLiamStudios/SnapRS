@@ -1,3 +1,5 @@
+use crab_nbt::Nbt;
+
 use crate::text::TextComponent;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
@@ -48,7 +50,7 @@ impl<E, F: SerializeFn<E> + ?Sized> Generate<E> for F {
     }
 }
 
-impl<E, F: SerializeFn<E>> Generate<E> for Option<F> {
+impl<E, F: Generate<E>> Generate<E> for Option<F> {
     fn generate_in_place(
         &self,
         buf: &mut Vec<u8>,
@@ -72,6 +74,28 @@ impl<E, T: Generate<E>> Generate<E> for &[T] {
     }
 }
 
+impl<E> Generate<E> for bool {
+    fn generate_in_place(
+        &self,
+        buf: &mut Vec<u8>,
+    ) -> Result<usize, E> {
+        let bytes = u8::from(*self).to_be_bytes();
+        buf.extend_from_slice(&bytes);
+        Ok(bytes.len())
+    }
+}
+
+impl<E: From<crab_nbt::error::Error>> Generate<E> for Nbt {
+    fn generate_in_place(
+        &self,
+        buf: &mut Vec<u8>,
+    ) -> Result<usize, E> {
+        let before = buf.len();
+        self.write_unnamed_to_writer(&mut *buf)?;
+        Ok(buf.len() - before)
+    }
+}
+
 pub fn cond<E>(
     value: impl Generate<E>,
     condition: impl Fn() -> bool,
@@ -85,11 +109,12 @@ pub fn cond<E>(
     }
 }
 
-#[must_use]
+// TODO: EncodeError this
 /// # Panics
 /// Will panic if the input posision is outside the constraints for a Position;
 /// - x, z -> 26 bits
 /// - y -> 12 bits
+#[must_use]
 pub fn position<E>(position: vek::Vec3<i32>) -> impl SerializeFn<E> {
     assert!(position.x <= 2i32.pow(26), "X Coord OOB for Position Type");
     assert!(position.z <= 2i32.pow(26), "Z Coord OOB for Position Type");
