@@ -3,7 +3,10 @@
 
 use std::error::Error;
 
-use smol::stream::StreamExt;
+use smol::{
+    Executor,
+    stream::StreamExt,
+};
 use tracing::{
     debug,
     info,
@@ -27,19 +30,25 @@ pub mod world;
 pub mod blocks;
 
 async fn run_server() -> Result<(), Box<dyn Error>> {
-    let socket = smol::net::TcpListener::bind("127.0.0.1:25565").await?;
-    let mut incoming = socket.incoming();
+    let executor = Executor::new();
 
-    while let Some(client) = incoming.next().await {
-        let stream = client?;
-        stream.set_nodelay(true)?;
-        debug!(addr = ?stream.peer_addr(), "New client connection");
+    executor
+        .run(async {
+            let socket = smol::net::TcpListener::bind("127.0.0.1:25565").await?;
+            let mut incoming = socket.incoming();
 
-        // Spawn a new task for each client
-        smol::spawn(client::spawn(stream)).await;
-    }
+            while let Some(client) = incoming.next().await {
+                let stream = client?;
+                stream.set_nodelay(true)?;
+                debug!(addr = ?stream.peer_addr(), "New client connection");
 
-    Ok(())
+                // Spawn a new task for each client
+                executor.spawn(client::spawn(stream)).detach();
+            }
+
+            Ok(())
+        })
+        .await
 }
 
 fn main() -> Result<(), Box<dyn Error>> {

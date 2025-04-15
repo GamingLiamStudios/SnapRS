@@ -1,4 +1,5 @@
 use crab_nbt::NbtCompound;
+use educe::Educe;
 use uuid::Uuid;
 
 use super::ConfigureError;
@@ -113,8 +114,10 @@ impl Generate<ConfigureError> for Ping {
 }
 
 // TODO: Test this with actual registry data
-#[derive(Debug)]
+#[derive(Educe)]
+#[educe(Debug)]
 pub struct RegistryData {
+    #[educe(Debug(ignore))]
     data: crab_nbt::Nbt,
 }
 

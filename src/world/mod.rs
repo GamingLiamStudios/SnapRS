@@ -3,10 +3,14 @@ use std::{
         BTreeMap,
         BTreeSet,
     },
-    range::RangeInclusive,
+    range::{
+        Range,
+        RangeInclusive,
+    },
 };
 
 use crab_nbt::nbt;
+use tracing::debug;
 
 use crate::{
     blocks::BlockState,
@@ -93,7 +97,7 @@ impl ChunkSection {
 
         let index =
             ((position.y as usize) << 8) | ((position.z as usize) << 4) | (position.x as usize);
-        self.data[index] = id;
+        self.data[index] = block.to_id();
 
         Some(id)
     }
@@ -147,12 +151,14 @@ impl<E: From<EncodeError>> Generate<E> for ChunkSection {
             },
             2..=8 => {
                 // Palette
+                let bits = 15;
                 buf.push(bits);
-                _ = encode::write_varint(i32::try_from(full_palette.len()).expect("Unreachable"))
-                    .generate_in_place(buf)?;
-                for block_id in full_palette {
-                    _ = encode::write_varint(i32::from(block_id)).generate_in_place(buf)?;
-                }
+
+                //_ = encode::write_varint(i32::try_from(full_palette.len()).expect("Unreachable"))
+                //    .generate_in_place(buf)?;
+                //for block_id in full_palette {
+                //    _ = encode::write_varint(i32::from(block_id)).generate_in_place(buf)?;
+                //}
 
                 // How many longs required to store the blocks
                 let blocks_per_long = 64 / bits;
@@ -188,7 +194,7 @@ impl<E: From<EncodeError>> Generate<E> for ChunkSection {
 
 #[derive(Debug)]
 pub struct Chunk {
-    pub height: RangeInclusive<i32>,
+    pub height: Range<i32>,
     sections:   BTreeMap<i32, ChunkSection>,
 }
 
@@ -199,7 +205,7 @@ impl Chunk {
         max_y: i32,
     ) -> Self {
         Self {
-            height:   RangeInclusive {
+            height:   Range {
                 start: min_y,
                 end:   max_y,
             },
@@ -287,7 +293,7 @@ impl<E: From<EncodeError> + From<crab_nbt::error::Error>> Generate<E> for &Chunk
 
 #[derive(Debug)]
 pub struct World {
-    height: RangeInclusive<i32>,
+    height: Range<i32>,
     chunks: BTreeMap<(i32, i32), Chunk>,
 }
 
@@ -311,7 +317,7 @@ impl World {
         );
 
         Self {
-            height: RangeInclusive {
+            height: Range {
                 start: min_y,
                 end:   min_y + height,
             },

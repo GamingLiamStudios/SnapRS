@@ -1,5 +1,6 @@
 use bitflags::bitflags;
 use crab_nbt::nbt;
+use educe::Educe;
 use vek::{
     Vec2,
     Vec3,
@@ -284,11 +285,13 @@ impl Generate<PlayError> for KeepAlive {
     }
 }
 
-#[derive(Debug)]
+#[derive(Educe)]
+#[educe(Debug)]
 pub struct ChunkFull<'a> {
     pub chunk_x: i32,
     pub chunk_z: i32,
 
+    #[educe(Debug(ignore))]
     pub chunk: &'a Chunk,
 }
 
@@ -305,6 +308,7 @@ impl Generate<PlayError> for ChunkFull<'_> {
             self.chunk_x,
             self.chunk_z,
             self.chunk,
+            0u8,
             0u8,
             0u8,
             0u8,
