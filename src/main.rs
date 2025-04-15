@@ -29,6 +29,10 @@ pub mod world;
 
 pub mod blocks;
 
+mod registry {
+    include!(concat!(env!("OUT_DIR"), "/registry.rs"));
+}
+
 async fn run_server() -> Result<(), Box<dyn Error>> {
     let executor = Executor::new();
 

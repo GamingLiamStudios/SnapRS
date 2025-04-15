@@ -16,6 +16,7 @@ use convert_case::{
     Case,
     Casing,
 };
+use quote::quote;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -587,6 +588,42 @@ fn main() -> Result<(), Box<dyn Error>> {
     writeln!(&mut blocks_file, "\t}}")?;
 
     writeln!(&mut blocks_file, "}}")?;
+
+    // Fetch known registries
+    let list_files = |path: &str| -> Vec<_> {
+        let mut filenames = Vec::new();
+
+        for entry in std::fs::read_dir(path).expect("shitface") {
+            let entry = entry.expect("shitface");
+            let path = entry.path();
+            if path.is_file() {
+                let filename = path
+                    .file_stem()
+                    .expect("shitface")
+                    .to_string_lossy()
+                    .to_string();
+                filenames.push(filename);
+            }
+        }
+
+        filenames.iter().map(|name| quote! { #name }).collect()
+    };
+
+    let biomes = list_files("generated/data/minecraft/worldgen/biome");
+    let damage_types = list_files("generated/data/minecraft/damage_type");
+
+    let tokens = quote! {
+        pub const BIOME_NAMES: &[&str] = &[
+            #(#biomes),*
+        ];
+
+        pub const DAMAGE_TYPES: &[&str] = &[
+            #(#damage_types),*
+        ];
+    };
+    std::fs::write(format!("{out_dir}/registry.rs"), tokens.to_string())?;
+
+    println!("cargo:rerun-if-changed=assets");
 
     Ok(())
 }

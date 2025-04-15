@@ -1,5 +1,13 @@
+use std::{
+    fmt::Debug,
+    fs::File,
+    io::Write,
+};
+
 use crab_nbt::NbtCompound;
 use educe::Educe;
+use serde::Serialize;
+use snap_registry::Registry;
 use uuid::Uuid;
 
 use super::ConfigureError;
@@ -113,7 +121,7 @@ impl Generate<ConfigureError> for Ping {
     }
 }
 
-// TODO: Test this with actual registry data
+// TODO: Tests
 #[derive(Educe)]
 #[educe(Debug)]
 pub struct RegistryData {
@@ -129,12 +137,21 @@ impl RegistryData {
         }
     }
 
-    // TODO: Allow this to have generic inputs that impl Serialize
-    pub fn add_entry(
+    pub fn add_entry<T: Serialize + Debug + Clone>(
         &mut self,
-        data: crab_nbt::Nbt,
-    ) {
-        self.data.root_tag.put(data.name, data.root_tag);
+        registry_type: &str,
+        value: &[T],
+    ) -> Result<(), crab_nbt::error::Error> {
+        // TODO: How about don't serialize + deserialize
+        let mut nbt = crab_nbt::serde::ser::to_bytes_unnamed(&Registry {
+            registry_type,
+            value,
+        })?;
+        let nbt = crab_nbt::Nbt::read_unnamed(&mut nbt)?;
+        self.data
+            .root_tag
+            .put(registry_type.to_string(), nbt.root_tag);
+        Ok(())
     }
 }
 

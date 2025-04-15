@@ -1,0 +1,17 @@
+[package]
+edition = "2024"
+name = "snap_registry"
+version = "0.1.0"
+
+[lints.clippy]
+all = "deny"
+enum_glob_use = "deny"
+nursery = "deny"
+pedantic = "deny"
+perf = "deny"
+unwrap_used = "deny"
+
+[dependencies]
+bytemuck = "1.22"
+rgb = {version = "0.8", features = ["bytemuck"]}
+serde = {version = "1.0", features = ["derive"]}
