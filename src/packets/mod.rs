@@ -21,7 +21,6 @@ use smol::{
     net::TcpStream,
 };
 use tracing::{
-    debug,
     trace,
     warn,
 };
@@ -222,7 +221,7 @@ pub async fn recv_packet(
         buf.extend_from_slice(packet_data);
     }
 
-    trace!(bytes = buf.as_slice(), "Recv'd Packet");
+    //trace!(bytes = buf.as_slice(), "Recv'd Packet");
 
     Ok(())
 }

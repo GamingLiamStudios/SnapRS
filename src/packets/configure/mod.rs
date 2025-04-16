@@ -1,4 +1,3 @@
-use bitflags::bitflags;
 use nom::{
     IResult,
     Parser,
@@ -36,44 +35,7 @@ use crate::{
 
 pub mod client;
 
-#[derive(Debug)]
-pub enum ConfigureError {
-    OversizedPluginData,
-    NbtEncode(crab_nbt::error::Error),
-    Encode(EncodeError),
-    Io(std::io::Error),
-}
-
-impl From<std::io::Error> for ConfigureError {
-    fn from(value: std::io::Error) -> Self {
-        Self::Io(value)
-    }
-}
-
-impl From<crab_nbt::error::Error> for ConfigureError {
-    fn from(value: crab_nbt::error::Error) -> Self {
-        Self::NbtEncode(value)
-    }
-}
-
-impl From<EncodeError> for ConfigureError {
-    fn from(value: EncodeError) -> Self {
-        Self::Encode(value)
-    }
-}
-
-impl PacketError for ConfigureError {
-    fn describe(&self) -> TextComponent {
-        match self {
-            Self::OversizedPluginData => {
-                TextComponent::new_text("Server attempted to send oversize Plugin Payload")
-            },
-            Self::NbtEncode(error) => TextComponent::new_text(error.to_string()),
-            Self::Encode(error) => error.describe(),
-            Self::Io(error) => TextComponent::new_text(error.to_string()),
-        }
-    }
-}
+pub use super::login::LoginError as ConfigureError;
 
 #[derive(Debug, Clone, Copy)]
 pub enum ClientResouceResponse {

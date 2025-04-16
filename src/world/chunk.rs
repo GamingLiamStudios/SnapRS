@@ -101,6 +101,7 @@ impl ChunkSection {
 
     /// # Panics
     /// Will panic if (x, y, z) are >= 16
+    #[must_use]
     pub fn get_block(
         &self,
         position: vek::Vec3<u8>,
@@ -215,6 +216,8 @@ impl Chunk {
         self.height.end - self.height.start
     }
 
+    /// # Panics
+    /// Will panic if internal logic fails (unreachable)
     #[must_use]
     pub fn get_block(
         &mut self,
@@ -239,6 +242,8 @@ impl Chunk {
             )
     }
 
+    /// # Panics
+    /// Will panic if internal logic fails (unreachable)
     pub fn set_block(
         &mut self,
         position: vek::Vec3<i32>,

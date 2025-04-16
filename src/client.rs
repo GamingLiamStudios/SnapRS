@@ -12,13 +12,8 @@ use tracing::{
     warn,
 };
 use uuid::Uuid;
-use vek::{
-    Vec2,
-    Vec3,
-};
 
 use crate::{
-    blocks::BlockState,
     encode::{
         self,
         Generate,
@@ -28,14 +23,14 @@ use crate::{
         COMPRESSION_MIN_SIZE,
         ClientConnection,
         DummyError,
-        play::client::PosRelativeFlags,
+        configure::ConfigureError,
     },
     parser::{
         construct_varint,
         parse_string,
         parse_varint,
     },
-    world::World,
+    text::TextComponent,
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -161,13 +156,13 @@ async fn handle_configure(
     client: &mut ClientConnection,
     buffer: &mut Vec<u8>,
     name: &str,
-) -> std::io::Result<i8> {
+) -> Result<i8, ConfigureError> {
     use packets::configure::{
         ConfigurePacket,
         client,
     };
 
-    let mut render_distance = 16;
+    let mut render_distance = 16; // Default render distance
     loop {
         packets::recv_packet(client, buffer).await?;
         match ConfigurePacket::parse(buffer) {
@@ -179,7 +174,7 @@ async fn handle_configure(
                     channel,
                     data: &response,
                 };
-                _ = client.write_packet(packet).await;
+                client.write_packet(packet).await?;
             },
             Ok((
                 _,
@@ -195,21 +190,41 @@ async fn handle_configure(
                 },
             )) => {
                 let packet = default_registries();
-                _ = client.write_packet(packet).await;
+                client.write_packet(packet).await?;
 
-                _ = client.write_packet(client::Finish).await;
+                client.write_packet(client::Finish).await?;
                 render_distance = view_distance;
             },
             Ok((_, ConfigurePacket::AckFinish)) => break,
             Ok((_, packet)) => {
                 info!(?packet, "{name} sent config packet");
             },
-            Err(nom::Err::Incomplete(_)) => {
-                warn!("Client sent incomplete packet");
-                return Err(std::io::ErrorKind::BrokenPipe.into());
+            Err(nom::Err::Incomplete(needed)) => {
+                warn!("Client sent malformed packet");
+
+                // Tell client to "fuck off and return with actual data"
+                client
+                    .write_packet(client::Disconnect {
+                        reason: &TextComponent::new_text(format!(
+                            "Recieved malformed packet: Incomplete data, expected {needed:?}"
+                        )),
+                    })
+                    .await?;
+                return Err(ConfigureError::Io(std::io::ErrorKind::InvalidData.into()));
             },
             Err(nom::Err::Error(error) | nom::Err::Failure(error)) => {
-                warn!(?error, "Unknown Packet?");
+                warn!(
+                    ?error,
+                    "ConfigurePacket returned error (unknown/malformed packet?)"
+                );
+                client
+                    .write_packet(client::Disconnect {
+                        reason: &TextComponent::new_text(format!(
+                            "Recieved malformed packet: Parser error; {error:?}"
+                        )),
+                    })
+                    .await?;
+                return Err(ConfigureError::Io(std::io::ErrorKind::InvalidData.into()));
             },
         }
     }
@@ -262,8 +277,17 @@ async fn handle_login(
     Ok((name, uuid))
 }
 
+pub struct NewConnection {
+    pub client: ClientConnection,
+
+    pub username: String,
+    pub uuid:     Uuid,
+
+    pub render_distance: i8,
+}
+
 #[allow(clippy::too_many_lines)]
-pub async fn spawn(stream: TcpStream) {
+pub async fn handle_new_connection(stream: TcpStream) -> Option<NewConnection> {
     let mut client = ClientConnection::new(stream);
 
     // Read handshake packet
@@ -274,7 +298,7 @@ pub async fn spawn(stream: TcpStream) {
         .is_err()
     {
         warn!("Attemped connection from invalid client");
-        return;
+        return None;
     }
 
     let Ok((_, (_, _, _server_address, _server_port, next_state))) = (
@@ -286,7 +310,7 @@ pub async fn spawn(stream: TcpStream) {
     )
         .parse(&buffer[..])
     else {
-        return;
+        return None;
     };
 
     match next_state {
@@ -302,7 +326,7 @@ pub async fn spawn(stream: TcpStream) {
                     .await
                     .is_err()
                 {
-                    return;
+                    return None;
                 }
 
                 match StatusPacket::parse(&buffer) {
@@ -310,37 +334,47 @@ pub async fn spawn(stream: TcpStream) {
                         // TODO: Fetch server info
                         let response = client::StatusResponse {};
                         if client.write_packet(response).await.is_err() {
-                            return;
+                            return None;
                         }
                     },
                     Ok((_, StatusPacket::Ping(timestamp))) => {
                         let response = client::StatusPong { timestamp };
                         _ = client.write_packet(response).await;
-                        return;
+                        return None;
                     },
-                    Err(_) => return,
+                    Err(_) => return None,
                 }
             }
         },
         2 => {
             // Login, handled outside of match
         },
-        _ => return,
+        _ => return None,
     }
 
     // Do Login
-    let Ok((name, uuid)) = handle_login(&mut client, &mut buffer).await else {
-        return;
+    let Ok((username, uuid)) = handle_login(&mut client, &mut buffer).await else {
+        return None;
     };
 
     // Do configuration flow
     // TODO: Add ResourcePack support
     // TODO: Actually use the info from here more
-    let Ok(render_distance) = handle_configure(&mut client, &mut buffer, &name).await else {
-        return;
+    let Ok(render_distance) = handle_configure(&mut client, &mut buffer, &username).await else {
+        return None;
     };
 
-    info!(render_distance, ?uuid, "{name} Connected");
+    info!(render_distance, ?uuid, "{username} Connected");
+    Some(NewConnection {
+        client,
+        username,
+        uuid,
+        render_distance,
+    })
+}
+
+/*
+
 
     // For the client to begin sending packets, we need to send 2 key packets
     // Login & SynchronizePosition
@@ -430,4 +464,4 @@ pub async fn spawn(stream: TcpStream) {
         debug!(?packet);
     }
     info!("Done with {name}");
-}
+*/

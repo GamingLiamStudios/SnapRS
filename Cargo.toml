@@ -3,6 +3,8 @@ edition = "2024"
 name = "snap_rs"
 version = "0.1.0"
 
+build = "build/main.rs"
+
 [workspace]
 members = ["registry"]
 
@@ -31,6 +33,7 @@ smol = "2.0"
 
 bitflags = "2.9"
 educe = "0.6"
+rand = "0.9"
 uuid = "1.16"
 
 snap_registry = {path = "registry"}
@@ -45,4 +48,7 @@ convert_case = "0.8"
 serde = {version = "1.0", features = ["derive"]}
 serde_json = "1.0"
 
+prettyplease = "0.2"
+proc-macro2 = "1.0"
 quote = "1.0"
+syn = "2.0"

@@ -27,6 +27,7 @@ pub mod client;
 #[derive(Debug)]
 pub enum LoginError {
     OversizedPluginData,
+    NbtEncode(crab_nbt::error::Error),
     Encode(EncodeError),
     Io(std::io::Error),
 }
@@ -34,6 +35,12 @@ pub enum LoginError {
 impl From<std::io::Error> for LoginError {
     fn from(value: std::io::Error) -> Self {
         Self::Io(value)
+    }
+}
+
+impl From<crab_nbt::error::Error> for LoginError {
+    fn from(value: crab_nbt::error::Error) -> Self {
+        Self::NbtEncode(value)
     }
 }
 
@@ -49,6 +56,7 @@ impl PacketError for LoginError {
             Self::OversizedPluginData => {
                 TextComponent::new_text("Server attempted to send oversize Plugin Payload")
             },
+            Self::NbtEncode(error) => TextComponent::new_text(error.to_string()),
             Self::Encode(error) => error.describe(),
             Self::Io(error) => TextComponent::new_text(error.to_string()),
         }

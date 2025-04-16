@@ -1,3 +1,5 @@
+use crate::registry::Blocks;
+
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub enum Axis {
     X,
@@ -199,4 +201,4 @@ pub enum StairShape {
     Straight,
 }
 
-include!(concat!(env!("OUT_DIR"), "/blocks.rs"));
+include!(concat!(env!("OUT_DIR"), "/block_states.rs"));

@@ -3,20 +3,15 @@ use std::{
         HashMap,
         HashSet,
     },
-    env,
     error::Error,
     fs::File,
-    io::{
-        BufReader,
-        Write,
-    },
+    io::BufReader,
 };
 
 use convert_case::{
     Case,
     Casing,
 };
-use quote::quote;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -98,86 +93,16 @@ impl Type {
     }
 }
 
-fn parse_state(
-    writer: &mut File,
-    props: &[(String, Type)],
-    state: &[(String, String)],
-    prefix: &str,
-) -> std::io::Result<()> {
-    if let Some(bitflag_name) = state
-        .iter()
-        .filter(|(name, _)| name.contains(char::is_numeric))
-        .map(|(name, _)| name)
-        .next()
-        .cloned()
-    {
-        if let Some((before, after)) = bitflag_name.split_once(char::is_numeric) {
-            let mut bitflag = 0;
-            let mut index = 0;
-            while let Some((_, value)) = state
-                .iter()
-                .find(|(name, _)| name == &format!("{before}{index}{after}"))
-            {
-                bitflag |= u8::from(value == "true") << index;
-                index += 1;
-            }
-
-            let bitflag_name = if after.is_empty() {
-                before[..before.len() - 1].to_owned()
-            } else {
-                format!("{}_{}", &before[..before.len() - 1], &after[1..])
-            };
-            writeln!(writer, "{prefix}{bitflag_name}: {bitflag},")?;
-        }
-    }
-
-    for (name, value) in state {
-        if name.contains(char::is_numeric) {
-            continue;
-        }
-
-        // Find type
-        let (_, prop_type) = props
-            .iter()
-            .find(|(prop_name, _)| prop_name == name)
-            .expect("Property doesn't exist");
-
-        let value = match value.as_str() {
-            "true" => "true",
-            "false" => "false",
-            "lower" => "Bottom",
-            "upper" => "Top",
-            "basedrum" => "BaseDrum",
-            value if value.contains(char::is_numeric) => value,
-            value => &value.to_case(Case::UpperCamel),
-        };
-        if matches!(prop_type, Type::Boolean | Type::Integer(_)) {
-            writeln!(writer, "{prefix}{name}: {value},")?;
-        } else {
-            writeln!(
-                writer,
-                "{prefix}{name}: {}::{value},",
-                prop_type.to_string()
-            )?;
-        }
-    }
-
-    Ok(())
-}
-
 #[derive(Debug)]
 pub struct ParsedBlock {
-    name:       String,
-    properties: Vec<(String, Type)>,
-    states:     Vec<(u16, Vec<(String, String)>)>,
-    default:    u16,
+    pub name:       String,
+    pub properties: Vec<(String, Type)>,
+    pub states:     Vec<(u16, Vec<(String, String)>)>,
+    pub default:    u16,
 }
 
 #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
-fn main() -> Result<(), Box<dyn Error>> {
-    let out_dir = env::var("OUT_DIR")?;
-    println!("cargo::warning={out_dir}");
-
+pub fn parse_blocks() -> Result<Vec<ParsedBlock>, Box<dyn Error>> {
     println!("cargo::rerun-if-changed=generated/reports/blocks.json");
     let reader = BufReader::new(File::open("generated/reports/blocks.json")?);
     let blocks: HashMap<String, Block> = serde_json::from_reader(reader)?;
@@ -437,193 +362,5 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    // Now that we have something parsed, lets turn it into code
-    let mut blocks_file = File::create(format!("{out_dir}/blocks.rs"))?;
-
-    writeln!(&mut blocks_file, "// Automatically Generated")?;
-
-    // Blocks
-    writeln!(
-        &mut blocks_file,
-        "#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]"
-    )?;
-    writeln!(&mut blocks_file, "#[repr(u16)]")?;
-    writeln!(&mut blocks_file, "pub enum Blocks {{")?;
-    for block in &parsed_blocks {
-        writeln!(&mut blocks_file, "\t{} = {},", block.name, block.default)?;
-    }
-    writeln!(&mut blocks_file, "}}\n")?;
-
-    // Enum definition
-    writeln!(
-        &mut blocks_file,
-        "#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]"
-    )?;
-    writeln!(&mut blocks_file, "pub enum BlockState {{")?;
-    for block in &parsed_blocks {
-        write!(&mut blocks_file, "\t{}", block.name)?;
-
-        match &block.properties[..] {
-            &[] => (),
-            properties => {
-                writeln!(&mut blocks_file, " {{")?;
-                for (name, property) in properties {
-                    writeln!(&mut blocks_file, "\t\t{name}: {},", property.to_string())?;
-                }
-                write!(&mut blocks_file, "\t}}")?;
-            },
-        }
-
-        writeln!(&mut blocks_file, ",")?;
-    }
-    writeln!(&mut blocks_file, "}}\n")?;
-
-    // TODO: Convert Type::Bitfield into bitfields!
-    writeln!(&mut blocks_file, "impl BlockState {{")?;
-
-    writeln!(&mut blocks_file, "\t#[must_use]")?;
-    writeln!(&mut blocks_file, "\tpub fn max_age(&self) -> Option<u8> {{")?;
-    writeln!(&mut blocks_file, "\t\tmatch self {{")?;
-    for block in parsed_blocks.iter().filter(|block| {
-        block
-            .properties
-            .iter()
-            .any(|(name, prop)| name == "age" && matches!(prop, Type::Integer(_)))
-    }) {
-        // Search through states to find largest age
-        let mut max_age = 0;
-        for (_id, state) in &block.states {
-            for (name, value) in state {
-                if name == "age" {
-                    max_age = max_age.max(value.parse().expect("Non integer age"));
-                }
-            }
-        }
-        writeln!(
-            &mut blocks_file,
-            "\t\t\tSelf::{} {{ .. }} => Some({max_age}),",
-            block.name
-        )?;
-    }
-    writeln!(&mut blocks_file, "\t\t\t_ => None,")?;
-    writeln!(&mut blocks_file, "\t\t}}")?;
-    writeln!(&mut blocks_file, "\t}}")?;
-
-    writeln!(&mut blocks_file, "\t#[must_use]")?;
-    writeln!(
-        &mut blocks_file,
-        "\tpub fn default(block: Blocks) -> Self {{"
-    )?;
-    writeln!(&mut blocks_file, "\t\tmatch block {{")?;
-    for block in &parsed_blocks {
-        for (id, state) in &block.states {
-            if *id != block.default {
-                continue;
-            }
-
-            // Convert specified state into actual state
-            write!(
-                &mut blocks_file,
-                "\t\t\tBlocks::{0} => Self::{0}",
-                block.name
-            )?;
-
-            if !state.is_empty() {
-                writeln!(&mut blocks_file, " {{")?;
-                parse_state(&mut blocks_file, &block.properties, state, "\t\t\t\t")?;
-                write!(&mut blocks_file, "\t\t\t}}")?;
-            }
-            writeln!(&mut blocks_file, ",")?;
-        }
-    }
-    writeln!(&mut blocks_file, "\t\t}}")?;
-    writeln!(&mut blocks_file, "\t}}")?;
-
-    // TODO: IMPROVE THIS ITS NEARLY 400 THOUSAND LINES
-
-    writeln!(&mut blocks_file, "\t#[must_use]")?;
-    writeln!(&mut blocks_file, "\tpub fn from_id(id: u16) -> Self {{")?;
-    writeln!(&mut blocks_file, "\t\tmatch id {{")?;
-    for block in &parsed_blocks {
-        for (id, state) in &block.states {
-            // Convert specified state into actual state
-            write!(&mut blocks_file, "\t\t\t{id} => Self::{0}", block.name)?;
-
-            if !state.is_empty() {
-                writeln!(&mut blocks_file, " {{")?;
-                parse_state(&mut blocks_file, &block.properties, state, "\t\t\t\t")?;
-                write!(&mut blocks_file, "\t\t\t}}")?;
-            }
-            writeln!(&mut blocks_file, ",")?;
-        }
-    }
-    writeln!(
-        &mut blocks_file,
-        "\t\t\t_ => unimplemented!(\"BlockID doesn't exist\"),"
-    )?;
-    writeln!(&mut blocks_file, "\t\t}}")?;
-    writeln!(&mut blocks_file, "\t}}")?;
-
-    writeln!(&mut blocks_file, "\t#[must_use]")?;
-    writeln!(&mut blocks_file, "\tpub fn to_id(&self) -> u16 {{")?;
-    writeln!(&mut blocks_file, "\t\tmatch self {{")?;
-    for block in &parsed_blocks {
-        for (id, state) in &block.states {
-            // Convert specified state into actual state
-            write!(&mut blocks_file, "\t\t\tSelf::{0}", block.name)?;
-
-            if !state.is_empty() {
-                writeln!(&mut blocks_file, " {{")?;
-                parse_state(&mut blocks_file, &block.properties, state, "\t\t\t\t")?;
-                write!(&mut blocks_file, "\t\t\t}}")?;
-            }
-            writeln!(&mut blocks_file, " => {id},")?;
-        }
-    }
-    writeln!(
-        &mut blocks_file,
-        "\t\t\t_ => unimplemented!(\"BlockID doesn't exist\"),"
-    )?;
-    writeln!(&mut blocks_file, "\t\t}}")?;
-    writeln!(&mut blocks_file, "\t}}")?;
-
-    writeln!(&mut blocks_file, "}}")?;
-
-    // Fetch known registries
-    let list_files = |path: &str| -> Vec<_> {
-        let mut filenames = Vec::new();
-
-        for entry in std::fs::read_dir(path).expect("shitface") {
-            let entry = entry.expect("shitface");
-            let path = entry.path();
-            if path.is_file() {
-                let filename = path
-                    .file_stem()
-                    .expect("shitface")
-                    .to_string_lossy()
-                    .to_string();
-                filenames.push(filename);
-            }
-        }
-
-        filenames.iter().map(|name| quote! { #name }).collect()
-    };
-
-    let biomes = list_files("generated/data/minecraft/worldgen/biome");
-    let damage_types = list_files("generated/data/minecraft/damage_type");
-
-    let tokens = quote! {
-        pub const BIOME_NAMES: &[&str] = &[
-            #(#biomes),*
-        ];
-
-        pub const DAMAGE_TYPES: &[&str] = &[
-            #(#damage_types),*
-        ];
-    };
-    std::fs::write(format!("{out_dir}/registry.rs"), tokens.to_string())?;
-
-    println!("cargo:rerun-if-changed=assets");
-
-    Ok(())
+    Ok(parsed_blocks)
 }

@@ -3,6 +3,7 @@
 
 use std::error::Error;
 
+use client::NewConnection;
 use smol::{
     Executor,
     stream::StreamExt,
@@ -30,6 +31,7 @@ pub mod world;
 pub mod blocks;
 
 mod registry {
+    #![allow(dead_code)]
     include!(concat!(env!("OUT_DIR"), "/registry.rs"));
 }
 
@@ -47,7 +49,19 @@ async fn run_server() -> Result<(), Box<dyn Error>> {
                 debug!(addr = ?stream.peer_addr(), "New client connection");
 
                 // Spawn a new task for each client
-                executor.spawn(client::spawn(stream)).detach();
+                executor
+                    .spawn(async {
+                        let Some(NewConnection {
+                            client,
+                            username,
+                            uuid,
+                            render_distance,
+                        }) = client::handle_new_connection(stream).await
+                        else {
+                            return;
+                        };
+                    })
+                    .detach();
             }
 
             Ok(())

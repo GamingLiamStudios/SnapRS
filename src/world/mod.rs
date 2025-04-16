@@ -4,18 +4,29 @@ use std::{
 };
 
 pub use chunk::Chunk;
+pub use entity::Entity;
+use entity::{
+    EntityData,
+    EntityId,
+};
 
 use crate::blocks::BlockState;
 
 pub mod chunk;
+pub mod entity;
 
 #[derive(Debug)]
 pub struct World {
     height: Range<i32>,
     chunks: BTreeMap<(i32, i32), Chunk>,
+
+    next_eid: u32,
+    entities: BTreeMap<EntityId, EntityData>,
 }
 
 impl World {
+    /// # Panics
+    /// Will panic if the world height isn't valid
     #[must_use]
     pub fn new(
         min_y: i32,
@@ -40,6 +51,9 @@ impl World {
                 end:   min_y + height,
             },
             chunks: BTreeMap::new(),
+
+            next_eid: 0,
+            entities: BTreeMap::new(),
         }
     }
 

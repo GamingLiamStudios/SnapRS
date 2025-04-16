@@ -19,7 +19,10 @@ use crate::{
         self,
         TextComponent,
     },
-    world::Chunk,
+    world::{
+        Chunk,
+        Entity,
+    },
 };
 
 // TODO: Create BundleScope interface
@@ -482,5 +485,24 @@ impl Generate<PlayError> for SyncPlayerPos {
             encode::write_varint(self.teleport_id),
         )
             .generate_in_place(buf)
+    }
+}
+
+#[derive(Debug)]
+pub struct SpawnEntity<'a> {
+    entity: &'a Entity,
+}
+
+impl PacketBuilder<PlayError> for SpawnEntity<'_> {
+    const PACKET_ID: i32 = 0x01;
+}
+
+impl Generate<PlayError> for SpawnEntity<'_> {
+    fn generate_in_place(
+        &self,
+        buf: &mut Vec<u8>,
+    ) -> Result<usize, PlayError> {
+        let (eid, entity) = self.entity;
+        (encode::write_varint(eid.into()), entity.uuid.as_u128()).generate_in_place(buf)
     }
 }
